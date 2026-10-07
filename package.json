@@ -1,0 +1,22 @@
+{
+  "name": "course-fetch",
+  "version": "0.3.0",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MiniYuanBot/course-fetch.git"
+  },
+  "description": "Tampermonkey userscript：北大教学网课堂实录课程录像枚举与命名",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test \"test/*.test.js\"",
+    "check": "node build.mjs && node --check dist/course-fetch.user.js",
+    "smoke": "node build.mjs && node test/browser-smoke.mjs",
+    "smoke:local": "node --test test/ui-smoke.test.js",
+    "ts2mp4": "node tools/ts2mp4.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "type": "module"
+}
