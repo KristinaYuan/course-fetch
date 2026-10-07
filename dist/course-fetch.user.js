@@ -22,6 +22,8 @@
 // @connect      pku.edu.cn
 // @connect      self
 // @run-at       document-idle
+// @license      MIT
+// @author       miniyuan
 // ==/UserScript==
 
 /*
