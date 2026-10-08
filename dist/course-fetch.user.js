@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Course Fetch
 // @namespace    https://github.com/MiniYuanBot/course-fetch
-// @version      0.4.0
+// @version      0.4.1
 // @description  北大教学网课堂实录：枚举整门课程录像、排序、命名、导出 manifest，支持单条和批量下载，无损保存为 MP4。
 // @homepageURL  https://github.com/MiniYuanBot/course-fetch
 // @supportURL   https://github.com/MiniYuanBot/course-fetch/issues
@@ -125,9 +125,14 @@
     return s || "untitled";
   }
   function formatFilename(template, entry, ctx = {}) {
+    const date = entry.date || "";
     const vars = {
       index: entry.index,
       date: entry.date,
+      YYYY: date.slice(0, 4),
+      YY: date.slice(2, 4),
+      MM: date.slice(5, 7),
+      DD: date.slice(8, 10),
       periodStart: entry.periodStart,
       periodEnd: entry.periodEnd,
       teacher: entry.teacher || "",
@@ -2347,7 +2352,7 @@
     <div class="bd">
       <label><span>课程</span><input type="text" class="course"></label>
       <label><span>命名模板</span><input type="text" class="tpl"><button class="reset-tpl">重置</button></label>
-      <div class="hint">变量：{index:02d} {date} {periodStart} {periodEnd} {teacher} {course} {time}</div>
+      <div class="hint">变量：{index:02d} {date} {YYYY} {YY} {MM} {DD} {periodStart} {periodEnd} {teacher} {course} {time} {startTime}</div>
       <label><span>输出格式</span><select class="fmt"><option value="mp4">MP4（无损转封装，推荐）</option><option value="ts">TS（原始流）</option></select></label>
       <div class="bar">
         <button data-act="scan">重新扫描</button>
@@ -2826,7 +2831,7 @@
   function listPage() {
     if (window.__courseFetchLoaded) return;
     window.__courseFetchLoaded = true;
-    const VERSION = typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version || "0.4.0";
+    const VERSION = typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version || "0.4.1";
     console.info(`[Course Fetch] v${VERSION} loaded`);
     const courseId = parseCourseId(location.href);
     const state = {

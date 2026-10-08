@@ -115,12 +115,18 @@ export function sanitizeFilename(name) {
 
 /**
  * 模板变量：{index} {date} {periodStart} {periodEnd} {teacher} {course} {time}(HHmm) {startTime}
+ * 日期拆分：{YYYY} {YY} {MM} {DD}，如 2026-09-15 → 2026 / 26 / 09 / 15，便于拼成 260915、0915 等。
  * 数字补零：{index:02d}、{index:3d} 均按零填充到指定宽度。未知变量原样保留。
  */
 export function formatFilename(template, entry, ctx = {}) {
+  const date = entry.date || '';
   const vars = {
     index: entry.index,
     date: entry.date,
+    YYYY: date.slice(0, 4),
+    YY: date.slice(2, 4),
+    MM: date.slice(5, 7),
+    DD: date.slice(8, 10),
     periodStart: entry.periodStart,
     periodEnd: entry.periodEnd,
     teacher: entry.teacher || '',

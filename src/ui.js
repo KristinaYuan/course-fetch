@@ -58,7 +58,7 @@ const PANEL_HTML = `
     <div class="bd">
       <label><span>课程</span><input type="text" class="course"></label>
       <label><span>命名模板</span><input type="text" class="tpl"><button class="reset-tpl">重置</button></label>
-      <div class="hint">变量：{index:02d} {date} {periodStart} {periodEnd} {teacher} {course} {time}</div>
+      <div class="hint">变量：{index:02d} {date} {YYYY} {YY} {MM} {DD} {periodStart} {periodEnd} {teacher} {course} {time} {startTime}</div>
       <label><span>输出格式</span><select class="fmt"><option value="mp4">MP4（无损转封装，推荐）</option><option value="ts">TS（原始流）</option></select></label>
       <div class="bar">
         <button data-act="scan">重新扫描</button>
