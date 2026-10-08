@@ -57,6 +57,7 @@ export function cancelBatch(batch) {
 export async function runBatch(batch, {
   openSink, locate, request, onChange = () => {},
   recordingConcurrency = BATCH_LIMITS.recordings,
+  sinkKind = 'file', // 'file' | 'opfs' | 'memory'
   segmentConcurrency = BATCH_LIMITS.segments,
   limiter = createRequestLimiter(BATCH_LIMITS.requests),
   retryDelayMs = 1000,
@@ -65,6 +66,14 @@ export async function runBatch(batch, {
   positiveInteger(segmentConcurrency, '分片并发数');
   const limitedRequest = limiter.wrap(request);
   batch.phase = 'download';
+  // 内存合并每段约等于视频大小，必须逐条；临时文件和磁盘可按录制并发处理。
+  const workerCount = sinkKind === 'memory' ? 1 : recordingConcurrency;
+  const checkSink = (sink) => {
+    const allowed = sinkKind === 'file' ? ['file'] : ['file', 'opfs', 'memory'];
+    if (!sink || !allowed.includes(sink.kind)) {
+      throw new Error('批量下载必须直接写入磁盘，或使用浏览器保存模式');
+    }
+  };
   let next = 0;
   async function runTask(task) {
     const { signal } = task.controller;
@@ -77,7 +86,7 @@ export async function runBatch(batch, {
       // 文件句柄创建不能 abortable：必须取得最终结果后才能可靠关闭迟到的句柄。
       sink = await openSink(task.filename, signal);
       if (signal.aborted) throw abortError();
-      if (!sink || sink.kind !== 'file') throw new Error('批量下载必须直接写入磁盘');
+      checkSink(sink);
       task.filename = sink.filename || task.filename;
       task.phase = 'locate';
       onChange();
@@ -93,7 +102,7 @@ export async function runBatch(batch, {
           await old.abort();
           sink = await openSink(withExtension(task.filename, 'ts'), signal);
           if (signal.aborted) throw abortError();
-          if (!sink || sink.kind !== 'file') throw new Error('批量下载必须直接写入磁盘');
+          checkSink(sink);
           task.filename = sink.filename || withExtension(task.filename, 'ts');
           task.fallback = true;
           task.notice = `${error.reason}，无法无损转为 MP4，已改存为 TS`;
@@ -135,7 +144,7 @@ export async function runBatch(batch, {
   }
   try {
     const workers = [];
-    for (let i = 0; i < Math.min(recordingConcurrency, batch.tasks.length); i++) workers.push(worker());
+    for (let i = 0; i < Math.min(workerCount, batch.tasks.length); i++) workers.push(worker());
     await Promise.all(workers);
   } finally {
     batch.running = false;

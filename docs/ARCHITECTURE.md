@@ -44,7 +44,7 @@ tools/ts2mp4.mjs       # 离线把 .ts 无损转为 .mp4（与脚本共用 remux
 dist/course-fetch.user.js  # 构建产物：可直接安装的单文件 userscript
 ```
 
-`main` 组合 UI、批量调度、捕获和文件流；单条下载与批量共用 `directory` 的目录写入，`batch` 复用 `downloadHls`；`remux` 是 `downloadHls` 的 `write` 与文件流之间独立的一层；`scheduler` 限制实际请求；`downloader` 使用 `hls` 的解析和 AES 逻辑。网络、文件流和捕获方法都通过参数注入，核心流程可以在 Node 中运行。
+`main` 组合 UI、批量调度、捕获和文件流；单条下载与批量共用 `directory` 的保存位置（目录 / OPFS / 内存），`batch` 复用 `downloadHls`；`remux` 是 `downloadHls` 的 `write` 与文件流之间独立的一层；`scheduler` 限制实际请求；`downloader` 使用 `hls` 的解析和 AES 逻辑。网络、文件流和捕获方法都通过参数注入，核心流程可以在 Node 中运行。
 
 ## 脚本运行的页面
 
@@ -85,7 +85,7 @@ dist/course-fetch.user.js  # 构建产物：可直接安装的单文件 userscri
 - 每条录像在目录中创建独立文件，通过 `FileSystemWritableFileStream` 顺序写入；MP4 完成时用 `write({ type: 'write', position })` 回填文件头。
 - 同名避让：已有文件或同批重名时依次尝试 `name (2).ext`、`name (3).ext`……，在 `await` 之前预留名称，并发任务不会选到同一个文件名。
 - 失败或取消时 `abort()` 文件流并删除未完成的文件；`close()` 成功才计为完成。
-- 单条下载在浏览器没有目录 API（Firefox），或调用时抛出 `SecurityError`（跨域 iframe）时，才退回内存合并，完成后交给浏览器下载，并在界面上说明原因。批量下载没有内存分支，不支持时直接失败。
+- 没有目录 API（Safari / Firefox），或调用时抛出 `SecurityError`（跨域 iframe）时，进入「浏览器保存」模式：`pickDownloadTarget` 依次退回 OPFS 临时文件（`FileSystemFileHandle.createWritable`，如 Safari 26+、Firefox 111+）或内存合并，完成后交给浏览器下载，并在界面上说明原因。内存合并每段约等于视频大小，批量强制逐条（`workerCount = 1`）；OPFS 临时文件写磁盘、不占内存，可按录制并发处理（多条同时完成时会同时触发多个浏览器下载）。
 
 ## 并发捕获关联
 
@@ -161,7 +161,7 @@ npm run ts2mp4 -- in.ts [out.mp4]   # 离线转封装
 发布新版本：
 
 1. 修改 `package.json` 的 `version`，运行 `npm test` 和 `npm run build`。
-2. 提交并推送，打标签：`git tag v0.3.0 && git push origin v0.3.0`。
+2. 提交并推送，打标签：`git tag v0.4.0 && git push origin v0.4.0`。
 3. 在 GitHub 上用该标签创建 Release，上传 `dist/course-fetch.user.js` 作为附件；文件名必须保持 `course-fetch.user.js`，自动更新链接才能找到它。
 
 - 教学网页面格式变化时，优先修改 `src/parser.js` 中的 `DATE_PERIOD_RE`、`TIME_RE`、`TEACHER_RE`，以及 `src/page.js` 中的 `extractPage`。
