@@ -172,28 +172,31 @@ test('打包脚本 UI 冒烟：默认 MP4、单条/批量都选目录直接写�
     assert.ok($('.dl').hidden);
     assert.ok(taskStates().every((t) => t === ''));
 
+    // 浏览器不支持目录写入（也无 OPFS）：批量改走内存合并、逐条保存，而不是失败。
     delete window.showDirectoryPicker;
+    hang = null;
     $('[data-act="download"]').click();
-    await until(() => /批次结束：成功 0，失败 3，取消 0/.test($('.status').textContent));
-    assert.ok(taskStates().every((t) => /失败：批量下载需要/.test(t)));
+    await until(() => /批次结束：成功 3，失败 0，取消 0/.test($('.status').textContent));
+    assert.ok(taskStates().every((t) => /已完成/.test(t)));
     assert.equal(picks, 3); assert.equal(saves, 0);
+    assert.equal(blobs.length, 3);
     $('.dl-cancel').click();
     assert.ok($('.dl').hidden);
 
-    // 浏览器不支持目录写入：单条才退回内存合并，并明确显示原因；取消后不保存
+    // 浏览器不支持目录写入：单条退回内存合并，并明确显示原因；取消后不保存
     $('[data-act="none"]').click();
     hang = '0';
     rows()[0].querySelector('[data-row="download"]').click();
     await until(() => /不支持目录写入.*改为在内存中合并/.test($('.dl-note').textContent) && !$('.dl-note').hidden);
     $('.dl-cancel').click();
     await until(() => /已取消下载/.test($('.status').textContent));
-    assert.equal(blobs.length, 0);
+    assert.equal(blobs.length, 3);
     hang = null;
     rows()[0].querySelector('[data-row="download"]').click();
     await until(() => /已完成：/.test($('.status').textContent));
-    assert.equal(blobs.length, 1);
-    assert.equal(blobs[0].type, 'video/mp4');
-    assert.equal(readMp4(new Uint8Array(await blobs[0].arrayBuffer())).tracks[0].samples.length, segments * 3);
+    assert.equal(blobs.length, 4);
+    assert.equal(blobs[3].type, 'video/mp4');
+    assert.equal(readMp4(new Uint8Array(await blobs[3].arrayBuffer())).tracks[0].samples.length, segments * 3);
     window.showDirectoryPicker = picker;
 
     // 切换为 TS：文件名和保存内容都是原始解密 TS；选择会被记住。

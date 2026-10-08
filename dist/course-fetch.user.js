@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Course Fetch
 // @namespace    https://github.com/MiniYuanBot/course-fetch
-// @version      0.3.0
+// @version      0.4.0
 // @description  北大教学网课堂实录：枚举整门课程录像、排序、命名、导出 manifest，支持单条和批量下载，无损保存为 MP4。
 // @homepageURL  https://github.com/MiniYuanBot/course-fetch
 // @supportURL   https://github.com/MiniYuanBot/course-fetch/issues
@@ -583,14 +583,25 @@
       if (signal) signal.addEventListener("abort", onAbort, { once: true });
     });
   }
-  function saveBlob(blob, filename) {
+  function saveBlob(blob, filename, onRelease) {
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+    const url = URL.createObjectURL(blob);
+    a.href = url;
     a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 6e4);
+    try {
+      document.body.appendChild(a);
+      a.click();
+    } catch (error) {
+      URL.revokeObjectURL(url);
+      throw error;
+    } finally {
+      a.remove();
+    }
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+      if (onRelease) Promise.resolve().then(onRelease).catch(() => {
+      });
+    }, 6e4);
   }
   function memorySink(filename, save = saveBlob) {
     const mime = /\.mp4$/i.test(filename) ? "video/mp4" : "video/mp2t";
@@ -613,8 +624,8 @@
         }
         throw new Error("内存写入位置无效");
       },
-      close: () => {
-        save(new Blob(chunks, { type: mime }), filename);
+      close: async () => {
+        await save(new Blob(chunks, { type: mime }), filename);
         chunks = [];
       },
       abort: () => {
@@ -2178,6 +2189,8 @@
     onChange = () => {
     },
     recordingConcurrency = BATCH_LIMITS.recordings,
+    sinkKind = "file",
+    // 'file' | 'opfs' | 'memory'
     segmentConcurrency = BATCH_LIMITS.segments,
     limiter = createRequestLimiter(BATCH_LIMITS.requests),
     retryDelayMs = 1e3
@@ -2186,6 +2199,13 @@
     positiveInteger(segmentConcurrency, "分片并发数");
     const limitedRequest = limiter.wrap(request);
     batch.phase = "download";
+    const workerCount = sinkKind === "memory" ? 1 : recordingConcurrency;
+    const checkSink = (sink) => {
+      const allowed = sinkKind === "file" ? ["file"] : ["file", "opfs", "memory"];
+      if (!sink || !allowed.includes(sink.kind)) {
+        throw new Error("批量下载必须直接写入磁盘，或使用浏览器保存模式");
+      }
+    };
     let next = 0;
     async function runTask(task) {
       const { signal } = task.controller;
@@ -2197,7 +2217,7 @@
         if (!task.watchUrl) throw new Error("该条目没有可用的观看链接");
         sink = await openSink(task.filename, signal);
         if (signal.aborted) throw abortError();
-        if (!sink || sink.kind !== "file") throw new Error("批量下载必须直接写入磁盘");
+        checkSink(sink);
         task.filename = sink.filename || task.filename;
         task.phase = "locate";
         onChange();
@@ -2213,7 +2233,7 @@
             await old.abort();
             sink = await openSink(withExtension(task.filename, "ts"), signal);
             if (signal.aborted) throw abortError();
-            if (!sink || sink.kind !== "file") throw new Error("批量下载必须直接写入磁盘");
+            checkSink(sink);
             task.filename = sink.filename || withExtension(task.filename, "ts");
             task.fallback = true;
             task.notice = `${error.reason}，无法无损转为 MP4，已改存为 TS`;
@@ -2264,7 +2284,7 @@
     }
     try {
       const workers = [];
-      for (let i = 0; i < Math.min(recordingConcurrency, batch.tasks.length); i++) workers.push(worker());
+      for (let i = 0; i < Math.min(workerCount, batch.tasks.length); i++) workers.push(worker());
       await Promise.all(workers);
     } finally {
       batch.running = false;
@@ -2468,12 +2488,15 @@
           box2.cancel.disabled = batch.aborting;
           box2.cancel.textContent = batch.aborting ? "取消中…" : "取消整个批次";
           box2.l1.textContent = batch.phase === "pick" ? "选择目标目录" : `已处理 ${p.settled} / ${p.total}（${p.percent.toFixed(0)}%）· 成功 ${p.completed} · 失败 ${p.failed} · 取消 ${p.cancelled}`;
-          box2.l2.textContent = `正在处理 ${p.active} · 排队 ${p.queued} · 已写入 ${formatBytes(p.bytes)} · 直接写入磁盘（总进度按录像等权，含失败/取消）`;
+          const batchSave = batch.sinkKind === "file" ? "直接写入磁盘" : batch.sinkKind === "opfs" ? "浏览器临时存储" : "内存合并，逐条保存";
+          box2.l2.textContent = `正在处理 ${p.active} · 排队 ${p.queued} · 已写入 ${formatBytes(p.bytes)} · ${batchSave}（总进度按录像等权，含失败/取消）`;
         }
-        if (p.fallbacks) {
-          box2.note.hidden = false;
-          box2.note.textContent = `⚠ ${p.fallbacks} 条录像编码无法无损转为 MP4，已改存为 TS`;
-        }
+        const notes = [];
+        if (p.fallbacks) notes.push(`⚠ ${p.fallbacks} 条录像编码无法无损转为 MP4，已改存为 TS`);
+        if (batch.sinkKind === "opfs") notes.push(`⚠ ${batch.sinkNote || "当前浏览器不支持目录写入"}，使用浏览器临时存储，完成后保存`);
+        else if (batch.sinkKind === "memory") notes.push(`⚠ ${batch.sinkNote || "当前浏览器不支持目录写入"}，内存合并，逐条保存`);
+        box2.note.hidden = !notes.length;
+        box2.note.textContent = notes.join("；");
         box2.warn.hidden = !p.badTs;
         box2.warn.textContent = p.badTs ? `⚠ ${p.badTs} 个分片不是有效的 TS 数据，请检查对应录像` : "";
         for (const task of batch.tasks) {
@@ -2511,13 +2534,17 @@
           parts.push(`${formatBytes(d.bytes / elapsed)}/s`);
           if (d.done > 0 && d.done < d.total) parts.push(`剩余约 ${formatDuration(elapsed / d.done * (d.total - d.done))}`);
         }
-        parts.push(d.sinkKind === "file" ? "直接写入磁盘" : "内存中合并，完成后保存");
+        parts.push(d.sinkKind === "file" ? "直接写入磁盘" : d.sinkKind === "opfs" ? "浏览器临时存储，完成后保存" : "内存中合并，完成后保存");
         if (/\.mp4$/i.test(d.filename)) parts.push("边下载边转封装 MP4");
       }
       box2.l2.textContent = parts.join(" · ");
       box2.warn.hidden = !d.badTs;
       box2.warn.textContent = d.badTs ? `⚠ ${d.badTs} 个分片解密后不是有效的 TS 数据（key/IV 可能不对），建议取消后检查` : "";
-      const note = [d.sinkKind === "memory" && d.sinkNote ? `${d.sinkNote}，改为在内存中合并（占用内存约等于视频大小）` : "", d.notice].filter(Boolean);
+      const note = [
+        d.sinkKind === "memory" && d.sinkNote ? `${d.sinkNote}，改为在内存中合并（占用内存约等于视频大小）` : "",
+        d.sinkKind === "opfs" ? `${d.sinkNote || "当前浏览器不支持目录写入"}，使用浏览器临时存储，完成后保存` : "",
+        d.notice
+      ].filter(Boolean);
       box2.note.hidden = !note.length;
       box2.note.textContent = note.map((n) => `⚠ ${n}`).join("；");
       const btn = ui.tbody.querySelector(`tr[data-key="${CSS.escape(d.key)}"] button[data-row="download"]`);
@@ -2665,7 +2692,7 @@
   // src/directory.js
   async function pickDownloadDirectory(win = window) {
     if (typeof win.showDirectoryPicker !== "function") {
-      throw new Error("批量下载需要支持目录写入的 Chrome / Edge，请在独立的 HTTPS 课堂实录页面中使用");
+      throw new Error("当前浏览器不支持选择本地下载目录");
     }
     return win.showDirectoryPicker({ mode: "readwrite" });
   }
@@ -2707,24 +2734,82 @@
         writeAt: (position, data) => writable.write({ type: "write", position, data }),
         close: () => writable.close(),
         abort: async () => {
-          await writable.abort();
-          await directory.removeEntry(name);
+          try {
+            await writable.abort();
+          } finally {
+            await directory.removeEntry(name);
+          }
         }
       };
     };
   }
-  async function pickSingleTarget(win = window) {
-    let reason = "当前浏览器不支持目录写入（需要 Chrome / Edge）";
+  function createOpfsSinkFactory(directory, save = saveBlob) {
+    return async (filename, signal) => {
+      if (signal?.aborted) throw abortError();
+      const name = `${crypto.randomUUID()}.tmp`;
+      const handle = await directory.getFileHandle(name, { create: true });
+      const remove = () => directory.removeEntry(name);
+      let writable, closed = false;
+      try {
+        if (signal?.aborted) throw abortError();
+        writable = await handle.createWritable();
+        if (signal?.aborted) throw abortError();
+      } catch (error) {
+        if (writable) await Promise.resolve().then(() => writable.abort()).catch(() => {
+        });
+        await remove().catch(() => {
+        });
+        throw error;
+      }
+      return {
+        kind: "opfs",
+        filename,
+        write: (data) => writable.write(data),
+        writeAt: (position, data) => writable.write({ type: "write", position, data }),
+        close: async () => {
+          if (signal?.aborted) throw abortError();
+          await writable.close();
+          closed = true;
+          const file = await handle.getFile();
+          if (signal?.aborted) throw abortError();
+          await save(file, filename, remove);
+        },
+        abort: async () => {
+          try {
+            if (!closed) await writable.abort();
+          } finally {
+            await remove();
+          }
+        }
+      };
+    };
+  }
+  async function pickDownloadTarget(win = window, save = saveBlob) {
+    let reason = "当前浏览器不支持目录写入";
     if (typeof win.showDirectoryPicker === "function") {
       try {
-        const directory = await win.showDirectoryPicker({ mode: "readwrite" });
+        const directory = await pickDownloadDirectory(win);
         return { kind: "file", reason: "", open: createDirectorySinkFactory(directory) };
       } catch (error) {
         if (error.name !== "SecurityError") throw error;
         reason = "当前页面不允许目录写入（可能在跨域 iframe 中，可右键「在新标签页中打开框架」）";
       }
     }
-    return { kind: "memory", reason, open: async (filename) => Object.assign(memorySink(filename), { filename }) };
+    const storage = win.navigator?.storage;
+    if (typeof storage?.getDirectory === "function" && typeof win.FileSystemFileHandle?.prototype?.createWritable === "function") {
+      try {
+        const root = await storage.getDirectory();
+        const directory = await root.getDirectoryHandle("course-fetch", { create: true });
+        return { kind: "opfs", reason, open: createOpfsSinkFactory(directory, save) };
+      } catch (error) {
+        if (!["SecurityError", "NotAllowedError", "NotSupportedError"].includes(error.name)) throw error;
+        reason += "，浏览器临时存储不可用";
+      }
+    }
+    return { kind: "memory", reason, open: async (filename, signal) => {
+      if (signal?.aborted) throw abortError();
+      return Object.assign(memorySink(filename, save), { filename });
+    } };
   }
 
   // src/main.js
@@ -2741,7 +2826,7 @@
   function listPage() {
     if (window.__courseFetchLoaded) return;
     window.__courseFetchLoaded = true;
-    const VERSION = typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version || "0.3.0";
+    const VERSION = typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version || "0.4.0";
     console.info(`[Course Fetch] v${VERSION} loaded`);
     const courseId = parseCourseId(location.href);
     const state = {
@@ -2836,7 +2921,7 @@
         phase: "pick",
         sinkKind: "",
         sinkNote: "",
-        // 退回内存合并的原因
+        // 使用浏览器保存模式的原因
         notice: "",
         done: 0,
         total: 0,
@@ -2853,7 +2938,7 @@
       let outcome;
       try {
         ui.render();
-        const target = await pickSingleTarget();
+        const target = await pickDownloadTarget();
         if (signal.aborted) throw abortError();
         dl.sinkKind = target.kind;
         dl.sinkNote = target.reason;
@@ -2910,6 +2995,7 @@
         if (result.badTs) outcome += `，但有 ${result.badTs} 个分片不是有效 TS，请检查文件`;
         if (dl.notice) outcome += `；${dl.notice}`;
         if (remuxed.warnings?.timestamps) outcome += `，${remuxed.warnings.timestamps} 处时间戳不连续已自动接续`;
+        if (target.kind !== "file") outcome += "；已交给浏览器保存，请在下载列表确认结果";
       } catch (e) {
         const cancelled = signal.aborted || e && e.name === "AbortError";
         let message = e && e.message;
@@ -2956,16 +3042,19 @@
       let pickCancelled = false;
       try {
         ui.render();
-        let directory;
+        let target;
         try {
-          directory = await pickDownloadDirectory();
+          target = await pickDownloadTarget();
         } catch (error) {
           pickCancelled = error.name === "AbortError";
           throw error;
         }
         if (batch.aborting) return;
+        batch.sinkKind = target.kind;
+        batch.sinkNote = target.reason;
         await runBatch(batch, {
-          openSink: createDirectorySinkFactory(directory),
+          openSink: target.open,
+          sinkKind: target.kind,
           locate: locatePlaylist,
           request: gmRequest,
           limiter: requestLimiter,
@@ -2990,6 +3079,7 @@
         } else {
           state.status = `批次结束：成功 ${p.completed}，失败 ${p.failed}，取消 ${p.cancelled}`;
           if (p.fallbacks) state.status += `；其中 ${p.fallbacks} 条编码无法无损转为 MP4，已改存为 TS`;
+          if (batch.sinkKind && batch.sinkKind !== "file" && p.completed) state.status += "；请在浏览器下载列表确认保存结果";
           state.collapsed = false;
         }
         ui.render();

@@ -92,7 +92,7 @@ const LIST_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>课�
   HTMLAnchorElement.prototype.click = function () {
     if (this.download && lastBlob) window.__saved.push({ name: this.download, blob: lastBlob });
   };
-  // 先模拟不支持目录写入的浏览器：单条下载走内存分支（后面的步骤会换成真实/假的目录）
+  // 先模拟不支持目录写入的浏览器：单条/批量走 OPFS 临时文件分支（后面的步骤会换成真实/假的目录）
   delete window.showDirectoryPicker;
 </script></head><body>
 <table><tbody>${ROW(0, '2026-09-30', 'SLOW')}${ROW(1, '2026-09-23', 'FAST')}</tbody></table>
@@ -190,14 +190,17 @@ async function pageTest() {
   out.savedCount = window.__saved.length;
   console.info('[smoke] 单条下载、取消、再次下载完成');
 
-  // 4) 不支持目录 API 时不能悄悄走 Blob；取消目录选择也不能启动 capture。
+  // 4) 不支持目录 API 时改用浏览器临时文件保存（Safari/Firefox 也可用）；取消目录选择也不能启动 capture。
   $('[data-act="all"]').click();
+  root.querySelectorAll('tbody input[type=checkbox]')[1].click(); // 只保留 FAST：SLOW 的分片会卡住批次
   delete window.showDirectoryPicker;
   $('[data-act="download"]').click();
-  await until(() => /批次结束/.test($('.status').textContent), 2000, '不支持目录的错误');
-  out.unsupported = [...root.querySelectorAll('.task-state')].map((n) => n.textContent);
+  await until(() => /批次结束：成功 1，失败 0，取消 0/.test($('.status').textContent), 15000, '浏览器保存模式批量下载');
+  out.browserSave = { task: root.querySelectorAll('.task-state')[0].textContent, saved: window.__saved.length, l2: $('.dl-l2').textContent };
+  $('.dl-cancel').click(); // 「确定」恢复页面
   let pickerCalls = 0;
   window.showDirectoryPicker = async () => { pickerCalls++; throw new DOMException('cancel', 'AbortError'); };
+  $('[data-act="all"]').click();
   $('[data-act="download"]').click();
   await until(() => /已取消批量下载（未选择目录）/.test($('.status').textContent), 2000, '取消目录');
   out.pickerCancelled = snap();
@@ -257,7 +260,7 @@ async function pageTest() {
 
   // 7) 真实 FileSystemWritableFileStream（OPFS 与 showDirectoryPicker 返回同一种句柄）：顺序写入 + 按位置回填 mdat 头。
   const opfs = await navigator.storage.getDirectory();
-  for await (const name of opfs.keys()) await opfs.removeEntry(name);
+  for await (const name of opfs.keys()) await opfs.removeEntry(name, { recursive: true });
   window.showDirectoryPicker = async () => opfs;
   root.querySelectorAll('tbody input[type=checkbox]')[1].click(); // 只保留 FAST（第 1 行）
   $('[data-act="download"]').click();
@@ -373,8 +376,8 @@ main()
     const widths = [...new Set(progress.map((s) => s.width))];
     check(widths.length >= 3, `进度条宽度逐步增长（采样到 ${widths.length} 个不同宽度，例如 ${widths.slice(0, 4).join(', ')}）`);
     const mid = progress[Math.floor(progress.length / 2)] || {};
-    check(/已下载 .+ · 视频 .+ \/ 4:00 · 内存中合并/.test(mid.l2 || ''), `详细信息：${mid.l2}`);
-    check(/不支持目录写入.*改为在内存中合并/.test(mid.note || ''), `不支持目录写入时说明内存合并原因：${mid.note}`);
+    check(/已下载 .+ · 视频 .+ \/ 4:00 · 浏览器临时存储/.test(mid.l2 || ''), `详细信息：${mid.l2}`);
+    check(/不支持目录写入.*使用浏览器临时存储/.test(mid.note || ''), `不支持目录写入时说明临时存储原因：${mid.note}`);
     check(/^下载 \d+%$/.test(mid.header || ''), `标题栏显示进度：${mid.header}`);
     check(/^\d+%$/.test(mid.btn0 || ''), `行内按钮显示进度：${mid.btn0}`);
     check(mid.btn1Disabled === true, '下载中其它行的下载按钮被禁用');
@@ -382,15 +385,15 @@ main()
     check(out.saved && out.saved.name === 'L01-2026-09-23-第3-4节.mp4', `保存文件名：${out.saved && out.saved.name}`);
     const savedFrames = out.saved && mp4Frames(out.saved.bytes);
     check(savedFrames && savedFrames[0] === FIXTURE.video.length && savedFrames[1] === FIXTURE.audio.length,
-      `内存合并的 MP4 完整：视频 ${savedFrames?.[0]} / ${FIXTURE.video.length} 帧，音频 ${savedFrames?.[1]} / ${FIXTURE.audio.length} 帧`);
+      `浏览器临时文件保存的 MP4 完整：视频 ${savedFrames?.[0]} / ${FIXTURE.video.length} 帧，音频 ${savedFrames?.[1]} / ${FIXTURE.audio.length} 帧`);
     check(out.cancelMs < 1500, `请求卡住时取消，${out.cancelMs} ms 内恢复`);
     const a = out.afterCancel;
     check(a.dlHidden && /已取消下载/.test(a.status), `取消后状态：${a.status}`);
     check(a.btn0 === '下载' && a.btn1 === '下载' && !a.btn1Disabled, '取消后按钮恢复为“下载”且可用');
     check(a.header === '2 条', `取消后标题栏恢复：${a.header}`);
     check(/已完成/.test(out.again.status) && out.savedCount === 2, '取消后可以再次下载');
-    check(out.unsupported.every((s) => /失败：批量下载需要/.test(s)), '不支持目录写入时显示每条失败原因');
-    check(/未选择目录/.test(out.pickerCancelled.status) && out.pickerCancelled.dlHidden && out.tabsBeforeBatch === 3, '取消目录选择不启动捕获或下载，并直接恢复页面');
+    check(/已完成/.test(out.browserSave.task) && out.browserSave.saved === 3, `不支持目录写入时批量用浏览器保存（${out.browserSave.task}，累计保存 ${out.browserSave.saved} 个）`);
+    check(/未选择目录/.test(out.pickerCancelled.status) && out.pickerCancelled.dlHidden && out.tabsBeforeBatch === 4, '取消目录选择不启动捕获或下载，并直接恢复页面');
     check(/批量 \d+% · 1\/2/.test(out.batchMid.header) && /成功 1/.test(out.batchMid.overall), '批量总体进度与完成数量可见');
     check(/已完成/.test(out.batchMid.tasks[0]) && /4\/24/.test(out.batchMid.tasks[1]), '每条录像状态和分片进度独立显示');
     check(/成功 1，失败 0，取消 1/.test(out.batchDone.status), '取消单条不影响另一条完成');
@@ -398,8 +401,8 @@ main()
     check(out.batchFiles.length === 1 && out.batchFiles[0].committed && /\.mp4$/.test(out.batchFiles[0].name) && batchFrames?.[0] === FIXTURE.video.length,
       `批量 AES 直接写盘的 MP4 完整（${out.batchFiles[0]?.name}，${batchFrames?.[0]} 帧），取消条目的文件已移除`);
     check(/取消 2/.test(out.batchCancelAll.status) && !out.batchCancelAll.btn1Disabled && out.filesAfterCancelAll === 1, '取消整个批次后按钮恢复、未完成文件清理');
-    check(out.pickerCalls === 3 && out.blobCountAfterBatch === 2, '每个批次只选一次目录，批量从未走 Blob 保存');
-    check(out.tabs.length === 7 && out.tabs.every((t) => /\/webapps\/playVideo\.action\?token=(FAST|SLOW)#course-fetch-capture=/.test(t.url)), `每个 capture 临时页携带独立任务 ID（${out.tabs.length} 次）`);
+    check(out.pickerCalls === 3 && out.blobCountAfterBatch === 3, '每个批次只选一次目录，批量从未走 Blob 保存');
+    check(out.tabs.length === 8 && out.tabs.every((t) => /\/webapps\/playVideo\.action\?token=(FAST|SLOW)#course-fetch-capture=/.test(t.url)), `每个 capture 临时页携带独立任务 ID（${out.tabs.length} 次）`);
     check(out.tabs.every((t) => t.closed), '捕获到 m3u8 后临时页均已关闭');
     const opfsFrames = out.opfs[0] && mp4Frames(out.opfs[0].bytes);
     check(out.opfs.length === 2 && out.opfs.every((f) => /\.mp4$/.test(f.name) && mp4Frames(f.bytes)?.[0] === FIXTURE.video.length) && opfsFrames?.[1] === FIXTURE.audio.length,

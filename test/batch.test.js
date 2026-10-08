@@ -201,6 +201,37 @@ test('批量模式拒绝 memory sink，不进行网络下载', async () => {
   assert.match(batch.tasks[0].error, /直接写入磁盘/);
 });
 
+test('内存合并逐条处理：允许 memory sink，但并发固定为 1，逐条保存', async () => {
+  const batch = createBatch(entries(2));
+  const server = hlsServer({ segments: 2 });
+  let maxRunning = 0;
+  const saved = [];
+  const result = await runBatch(batch, {
+    sinkKind: 'memory', request: server.request, locate: async (url) => url,
+    openSink: async (filename) => ({
+      kind: 'memory', filename,
+      write() {}, close() { saved.push(filename); }, abort() {},
+    }),
+    onChange() { maxRunning = Math.max(maxRunning, batch.tasks.filter((t) => t.status === 'running').length); },
+  });
+  assert.equal(result.completed, 2);
+  assert.equal(maxRunning, 1); // 内存合并每段约等于视频大小，必须逐条
+  assert.deepEqual(saved.sort(), ['L0.ts', 'L1.ts']);
+});
+
+test('OPFS 临时文件可并行：sinkKind=opfs 按录制并发下载多条录像', async () => {
+  const batch = createBatch(entries(3));
+  const server = hlsServer({ segments: 2 });
+  let maxRunning = 0;
+  const result = await runBatch(batch, {
+    sinkKind: 'opfs', recordingConcurrency: 2, request: server.request, locate: async (url) => url,
+    openSink: async () => ({ kind: 'opfs', write() {}, close() {}, abort() {} }),
+    onChange() { maxRunning = Math.max(maxRunning, batch.tasks.filter((t) => t.status === 'running').length); },
+  });
+  assert.equal(result.completed, 3);
+  assert.equal(maxRunning, 2); // OPFS 写磁盘临时文件，不占内存，可按录制并发处理
+});
+
 test('并发重试仍走全局上限，AES key 失败可重试；重试等待期间取消单条', async () => {
   const batch = createBatch(entries(3));
   const server = hlsServer({ segments: 3 });

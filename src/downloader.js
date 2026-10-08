@@ -369,14 +369,22 @@ export function gmRequest(url, type, signal, resource) {
   });
 }
 
-export function saveBlob(blob, filename) {
+export function saveBlob(blob, filename, onRelease) {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
+  const url = URL.createObjectURL(blob);
+  a.href = url;
   a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  try {
+    document.body.appendChild(a);
+    a.click();
+  } catch (error) {
+    URL.revokeObjectURL(url);
+    throw error;
+  } finally { a.remove(); }
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+    if (onRelease) Promise.resolve().then(onRelease).catch(() => {});
+  }, 60000);
 }
 
 /**
@@ -404,8 +412,8 @@ export function memorySink(filename, save = saveBlob) {
       }
       throw new Error('内存写入位置无效');
     },
-    close: () => {
-      save(new Blob(chunks, { type: mime }), filename);
+    close: async () => {
+      await save(new Blob(chunks, { type: mime }), filename);
       chunks = [];
     },
     abort: () => {

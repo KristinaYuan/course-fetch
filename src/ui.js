@@ -220,12 +220,17 @@ export function createUI({ state, courseId, filenameOf, outputNameOf = filenameO
         box.cancel.textContent = batch.aborting ? '取消中…' : '取消整个批次';
         box.l1.textContent = batch.phase === 'pick' ? '选择目标目录' :
           `已处理 ${p.settled} / ${p.total}（${p.percent.toFixed(0)}%）· 成功 ${p.completed} · 失败 ${p.failed} · 取消 ${p.cancelled}`;
-        box.l2.textContent = `正在处理 ${p.active} · 排队 ${p.queued} · 已写入 ${formatBytes(p.bytes)} · 直接写入磁盘（总进度按录像等权，含失败/取消）`;
+        const batchSave = batch.sinkKind === 'file' ? '直接写入磁盘'
+          : batch.sinkKind === 'opfs' ? '浏览器临时存储'
+          : '内存合并，逐条保存';
+        box.l2.textContent = `正在处理 ${p.active} · 排队 ${p.queued} · 已写入 ${formatBytes(p.bytes)} · ${batchSave}（总进度按录像等权，含失败/取消）`;
       }
-      if (p.fallbacks) {
-        box.note.hidden = false;
-        box.note.textContent = `⚠ ${p.fallbacks} 条录像编码无法无损转为 MP4，已改存为 TS`;
-      }
+      const notes = [];
+      if (p.fallbacks) notes.push(`⚠ ${p.fallbacks} 条录像编码无法无损转为 MP4，已改存为 TS`);
+      if (batch.sinkKind === 'opfs') notes.push(`⚠ ${batch.sinkNote || '当前浏览器不支持目录写入'}，使用浏览器临时存储，完成后保存`);
+      else if (batch.sinkKind === 'memory') notes.push(`⚠ ${batch.sinkNote || '当前浏览器不支持目录写入'}，内存合并，逐条保存`);
+      box.note.hidden = !notes.length;
+      box.note.textContent = notes.join('；');
       box.warn.hidden = !p.badTs;
       box.warn.textContent = p.badTs ? `⚠ ${p.badTs} 个分片不是有效的 TS 数据，请检查对应录像` : '';
       for (const task of batch.tasks) {
@@ -268,7 +273,7 @@ export function createUI({ state, courseId, filenameOf, outputNameOf = filenameO
         parts.push(`${formatBytes(d.bytes / elapsed)}/s`);
         if (d.done > 0 && d.done < d.total) parts.push(`剩余约 ${formatDuration((elapsed / d.done) * (d.total - d.done))}`);
       }
-      parts.push(d.sinkKind === 'file' ? '直接写入磁盘' : '内存中合并，完成后保存');
+      parts.push(d.sinkKind === 'file' ? '直接写入磁盘' : d.sinkKind === 'opfs' ? '浏览器临时存储，完成后保存' : '内存中合并，完成后保存');
       if (/\.mp4$/i.test(d.filename)) parts.push('边下载边转封装 MP4');
     }
     box.l2.textContent = parts.join(' · ');
@@ -276,7 +281,11 @@ export function createUI({ state, courseId, filenameOf, outputNameOf = filenameO
     box.warn.textContent = d.badTs
       ? `⚠ ${d.badTs} 个分片解密后不是有效的 TS 数据（key/IV 可能不对），建议取消后检查`
       : '';
-    const note = [d.sinkKind === 'memory' && d.sinkNote ? `${d.sinkNote}，改为在内存中合并（占用内存约等于视频大小）` : '', d.notice].filter(Boolean);
+    const note = [
+      d.sinkKind === 'memory' && d.sinkNote ? `${d.sinkNote}，改为在内存中合并（占用内存约等于视频大小）` : '',
+      d.sinkKind === 'opfs' ? `${d.sinkNote || '当前浏览器不支持目录写入'}，使用浏览器临时存储，完成后保存` : '',
+      d.notice,
+    ].filter(Boolean);
     box.note.hidden = !note.length;
     box.note.textContent = note.map((n) => `⚠ ${n}`).join('；');
 

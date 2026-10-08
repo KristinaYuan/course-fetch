@@ -18,7 +18,7 @@ import { store } from './storage.js';
 import { createUI, formatBytes, formatDuration } from './ui.js';
 import { BATCH_LIMITS, createBatch, runBatch, cancelBatch, cancelBatchTask, batchProgress } from './batch.js';
 import { createRequestLimiter } from './scheduler.js';
-import { pickDownloadDirectory, createDirectorySinkFactory, pickSingleTarget } from './directory.js';
+import { pickDownloadTarget } from './directory.js';
 import { createOutput } from './remux.js';
 
 const MAX_PAGES = 50;
@@ -138,7 +138,7 @@ function listPage() {
       aborting: false,
       phase: 'pick',
       sinkKind: '',
-      sinkNote: '', // 退回内存合并的原因
+      sinkNote: '', // 使用浏览器保存模式的原因
       notice: '',
       done: 0,
       total: 0,
@@ -158,7 +158,7 @@ function listPage() {
       // render 也放在 try 里：任何异常都会进入 finally，保证 state.download 被清空、页面恢复
       ui.render();
       // 与批量相同：点击后的第一个 await 选择目录（需要用户手势），之后直接写盘
-      const target = await pickSingleTarget();
+      const target = await pickDownloadTarget();
       if (signal.aborted) throw abortError();
       dl.sinkKind = target.kind;
       dl.sinkNote = target.reason;
@@ -218,6 +218,7 @@ function listPage() {
       if (result.badTs) outcome += `，但有 ${result.badTs} 个分片不是有效 TS，请检查文件`;
       if (dl.notice) outcome += `；${dl.notice}`;
       if (remuxed.warnings?.timestamps) outcome += `，${remuxed.warnings.timestamps} 处时间戳不连续已自动接续`;
+      if (target.kind !== 'file') outcome += '；已交给浏览器保存，请在下载列表确认结果';
     } catch (e) {
       const cancelled = signal.aborted || (e && e.name === 'AbortError');
       let message = e && e.message;
@@ -271,16 +272,18 @@ function listPage() {
     try {
       ui.render();
       // 保留点击手势：任何异步捕获、文件创建之前只弹一次目录选择器。
-      let directory;
+      let target;
       try {
-        directory = await pickDownloadDirectory();
+        target = await pickDownloadTarget();
       } catch (error) {
         pickCancelled = error.name === 'AbortError';
         throw error;
       }
       if (batch.aborting) return;
+      batch.sinkKind = target.kind;
+      batch.sinkNote = target.reason;
       await runBatch(batch, {
-        openSink: createDirectorySinkFactory(directory), locate: locatePlaylist,
+        openSink: target.open, sinkKind: target.kind, locate: locatePlaylist,
         request: gmRequest, limiter: requestLimiter, onChange: ui.updateDownloadUI,
       });
     } catch (error) {
@@ -301,6 +304,7 @@ function listPage() {
         // 保留每条结果，等待用户在进度区点「确定」后恢复页面
         state.status = `批次结束：成功 ${p.completed}，失败 ${p.failed}，取消 ${p.cancelled}`;
         if (p.fallbacks) state.status += `；其中 ${p.fallbacks} 条编码无法无损转为 MP4，已改存为 TS`;
+        if (batch.sinkKind && batch.sinkKind !== 'file' && p.completed) state.status += '；请在浏览器下载列表确认保存结果';
         state.collapsed = false;
       }
       ui.render();

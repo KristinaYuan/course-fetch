@@ -55,7 +55,7 @@ ftyp | mdat(64 位大小，最后回填) | 样本数据…… | moov
 
 - 生成的是普通（非分片）MP4，`moov` 在文件末尾。本地播放器和浏览器都能直接播放和拖动进度。
 - 如需上传网页做流式播放，可以用 `ffmpeg -i in.mp4 -c copy -movflags +faststart out.mp4` 把 `moov` 移到开头。
-- 目录写入用 `FileSystemWritableFileStream` 的按位置写入回填文件头。内存分支（Firefox、跨域 iframe）在完成前替换内存中的文件头块。
+- 目录 / OPFS 临时文件写入用 `FileSystemWritableFileStream` 的按位置写入回填文件头。内存分支（无 OPFS 的 Safari / Firefox、跨域 iframe）在完成前替换内存中的文件头块。
 
 ## 无法无损封装时
 
