@@ -95,6 +95,16 @@ test('formatFilename: 自定义模板、补零、未知变量、非法字符', (
   assert.equal(P.formatFilename('', e), 'L07-2026-09-30-第3-4节.mp4');
 });
 
+test('formatFilename: 日期拆分变量 {YYYY} {YY} {MM} {DD}', () => {
+  const e = { index: 3, date: '2026-09-15', periodStart: 3, periodEnd: 4, startTime: '', teacher: '' };
+  assert.equal(P.formatFilename('{YYYY}{MM}{DD}.mp4', e), '20260915.mp4');
+  assert.equal(P.formatFilename('{YY}{MM}{DD}.mp4', e), '260915.mp4');
+  assert.equal(P.formatFilename('{MM}{DD}.mp4', e), '0915.mp4');
+  assert.equal(P.formatFilename('L{index:02d}-{YY}{MM}{DD}.mp4', e), 'L03-260915.mp4');
+  // 没有日期时拆分变量为空，不抛错
+  assert.equal(P.formatFilename('{YYYY}{MM}{DD}.mp4', { index: 1, date: '' }), '.mp4');
+});
+
 test('parseCourseId', () => {
   assert.equal(P.parseCourseId('https://course.pku.edu.cn/webapps/x/videoList.action?course_id=_12345_1&foo=1'), '_12345_1');
   assert.equal(P.parseCourseId('https://course.pku.edu.cn/'), '');
