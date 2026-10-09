@@ -24,7 +24,7 @@ FileSystemWritableFileStream 直接写盘
 src/
   userscript.meta.js   # userscript header（@version 构建时从 package.json 填入）
   main.js              # 入口：初始化状态、扫描、打开/导出、单条和批量下载流程
-  parser.js            # 日期节次、排序去重、文件名模板、manifest（纯函数）
+  parser.js            # 日期节次、排序去重、排除与日期区间、文件名模板、manifest（纯函数）
   page.js              # 教学网页面：DOM 提取、分页、课程名、定位播放列表（自动捕获，超时后手动输入）
   capture.js           # m3u8 自动捕获：列表页打开临时播放页并等待结果；播放页用 Resource Timing 发现 m3u8
   capture-context.js   # 捕获身份：URL fragment + 跨域父子 frame 握手
@@ -120,6 +120,17 @@ dist/course-fetch.user.js  # 构建产物：可直接安装的单文件 userscri
 
 - 文件名中的非法字符 `\ / : * ? " < > |` 替换为 `_`，未知变量原样保留。
 - 模板中的视频扩展名会按「输出格式」换成 `.mp4` 或 `.ts`。
+
+「排除」用于放假时空回放占号的情况：`applyExclusions(entries, excludedKeys)` 在 `dedupeAndSort` 的排序结果之上重算序号，被排除项 `index` 记为 `null`、原序号存进 `origIndex`（列表里灰显并保留原文件名，避免出现 `L00`），其余从 1 连续编号。被排除项不参与 `{index}` 编号、批量下载、`buildListText` 和 `buildManifest`。
+
+排除集合有两个来源，由 `collectExclusions(entries, manualKeys, ranges)` 合并成 `Map<entryKey, 标签名>`（键集即排除集合，手动排除的标签名为空串）：
+
+- **本课程手动排除**：`state.excluded`，与 `state.selected` 同键空间（`entryKey`），存在 `excluded:<courseId>`。
+- **全局节假日标签**：`state.holidays` = `[{ name, ranges, enabled }]`，存在全局键 `holidays`，所有课程共享。`holidayRanges()` 展开启用的标签（`enabled === false` 的不展开），命中任意区间的条目自动排除，所以放假日期只需保存一次。
+
+面板上两者共用一个收起的「排除日期」区域：日期行只存在面板内存的 `exclLines` 里（不落存储），第一行左端 `+` 加行、其余行左端 `−` 删行，每行各自带「排除」（写入本课程手动集合）、「恢复」（按这一行的日期从手动集合里移除）、「存为标签」（就地展开名称输入，确认后写入全局标签）。标签胶囊复用同一份 `state.holidays`，勾选框切换 `enabled`。列表行只在被标签命中时显示标签名，不提供单条恢复；对标签排除的条目按日期「恢复」不动它，只提示去停用或删除标签。
+
+日期区间由 `parseDateRanges`（返回 `{ ranges, invalid }`；区间符支持 `~ ～ 至 到 ..`，日期分隔符支持 `- / .`）解析，`inRange` / `matchesDateRanges` 判断命中。被标签排除的行在列表里标注标签名、不提供「恢复」——要恢复就停用或删除标签；手动排除的行仍可逐条恢复。
 
 Manifest 示例：
 

@@ -14,7 +14,7 @@ async function until(fn) {
   assert.fail('打包脚本冒烟等待超时');
 }
 
-test('打包脚本 UI 冒烟：默认 MP4、单条/批量都选目录直接写盘、批次结束确认恢复、独立取消、整个批次取消、API 不支持、内存回退、切换 TS、HEVC 回退', async () => {
+test('打包脚本 UI 冒烟：默认 MP4、单条/批量都选目录直接写盘、批次结束确认恢复、独立取消、整个批次取消、API 不支持、内存回退、切换 TS、HEVC 回退、排除不占号、日期行可加行与存为标签', async () => {
   const row = (i) => h('tr', {},
     h('th', { scope: 'row' }, `2026-09-${20 + i}第3-4节`),
     h('td', {}, h('span', { class: 'table-data-cell-value' }, `2026-09-${20 + i} 10:10:00`)),
@@ -77,6 +77,7 @@ test('打包脚本 UI 冒烟：默认 MP4、单条/批量都选目录直接写�
     window, document, location: { href: 'https://course.pku.edu.cn/webapps/videoList.action?course_id=x' },
     URL: TestURL, URLSearchParams, AbortController, Uint8Array, Blob, crypto: crypto.webcrypto,
     setTimeout: timeout, clearTimeout, setInterval, clearInterval, confirm: () => true,
+    prompt: () => '',
     CSS: { escape: (s) => s }, console: { info() {}, warn() {} },
     GM_getValue: (k, fallback) => values.has(k) ? values.get(k) : fallback,
     GM_setValue: setValue, GM_deleteValue: (k) => values.delete(k),
@@ -216,6 +217,117 @@ test('打包脚本 UI 冒烟：默认 MP4、单条/批量都选目录直接写�
     assert.match($('.status').textContent, /已完成：L01-2026-09-20-第3-4节\.ts.*H\.265\/HEVC.*无法无损转为 MP4，已改存为 TS/);
     assert.deepEqual([...files.keys()], ['L01-2026-09-20-第3-4节.ts']);
     assert.ok(files.get('L01-2026-09-20-第3-4节.ts').bytes.equals(Buffer.concat(hevcSource.segments)));
+
+    // 排除：放假等空回放不占号，排除首条后其余条目的序号和文件名整体前移一位。
+    const names = () => rows().map((r) => r.querySelector('.fn').textContent);
+    assert.deepEqual(names(), ['L01-2026-09-20-第3-4节.mp4', 'L02-2026-09-21-第3-4节.mp4', 'L03-2026-09-22-第3-4节.mp4']);
+    rows()[0].querySelector('[data-row="toggle-exclude"]').click();
+    assert.ok(rows()[0].classList.contains('excluded'));
+    assert.equal(rows()[0].children[1].textContent, '—');
+    assert.ok(rows()[0].children[0].children[0].disabled); // 被排除的行不可勾选
+    assert.deepEqual(names(), ['L01-2026-09-20-第3-4节.mp4', 'L01-2026-09-21-第3-4节.mp4', 'L02-2026-09-22-第3-4节.mp4']);
+    assert.equal($('.count').textContent, '3 条（排除 1）');
+    assert.equal(values.get('excluded:x').join(','), '2026-09-20|3-4|2026-09-20 10:10:00'); // 按课程记住
+
+    // 导出 JSON 跳过被排除的条目
+    $('[data-act="export"]').click();
+    const manifest = JSON.parse(await blobs.at(-1).text());
+    assert.equal(manifest.count, 2);
+    assert.deepEqual(manifest.lectures.map((l) => l.filename), ['L01-2026-09-21-第3-4节.mp4', 'L02-2026-09-22-第3-4节.mp4']);
+
+    // 全选只勾选未被排除的条目
+    $('[data-act="all"]').click();
+    assert.equal($('.chk-all').checked, true);
+    assert.equal(rows()[0].children[0].children[0].checked, false);
+
+    // 日期行：每行各自处理（排除 / 恢复 / 存为标签）
+    const lines = () => $('.excl-rows').children;
+    const rowOf = (i) => lines()[i];
+    const setLine = (i, text) => { const el = rowOf(i).querySelector('.excl-line'); el.value = text; el.dispatch('input'); };
+    setLine(0, '2026-09-21~2026-09-22');
+    rowOf(0).querySelector('.excl-apply').click();
+    assert.equal($('.count').textContent, '3 条（排除 3）');
+    assert.equal(values.get('excluded:x').length, 3);
+    // 识别不了的日期不会改动现状
+    setLine(0, '放假');
+    rowOf(0).querySelector('.excl-apply').click();
+    assert.equal($('.count').textContent, '3 条（排除 3）');
+    // 「恢复」只恢复这一行日期对应的条目
+    setLine(0, '2026-09-20~2026-09-22');
+    rowOf(0).querySelector('.excl-restore').click();
+    assert.equal($('.count').textContent, '3 条');
+    assert.ok(!rows()[0].classList.contains('excluded'));
+    assert.ok(!values.has('excluded:x'));
+    assert.deepEqual(names(), ['L01-2026-09-20-第3-4节.mp4', 'L02-2026-09-21-第3-4节.mp4', 'L03-2026-09-22-第3-4节.mp4']);
+
+    // 「存为标签」：在这一行下面就地展开名称输入（不弹窗），再点一次收起
+    const tagNameInput = () => rowOf(0).querySelector('.tag-name');
+    rowOf(0).querySelector('.excl-tag').click();
+    assert.equal(rowOf(0).querySelector('.excl-name') !== null, true);
+    rowOf(0).querySelector('.excl-tag').click();
+    assert.equal(rowOf(0).querySelector('.excl-name'), null);
+    // 展开后填名字保存，对所有课程生效
+    setLine(0, '2026-09-21~2026-09-22');
+    rowOf(0).querySelector('.excl-tag').click();
+    tagNameInput().value = '中秋节';
+    tagNameInput().dispatch('input');
+    rowOf(0).querySelector('.excl-save').click();
+    assert.equal($('.holidays').children.length, 1);
+    assert.equal(values.get('holidays')[0].name, '中秋节'); // 存在全局键里，与课程无关
+    assert.equal($('.count').textContent, '3 条（排除 2）');
+    assert.deepEqual(names(), ['L01-2026-09-20-第3-4节.mp4', 'L02-2026-09-21-第3-4节.mp4', 'L03-2026-09-22-第3-4节.mp4']);
+    assert.equal(rows()[0].children[1].textContent, '1');
+    assert.equal(rows()[1].children[1].textContent, '—');
+    // 存完这一行就收掉，名称输入也跟着关掉
+    assert.equal(lines().length, 1);
+    assert.equal(rowOf(0).querySelector('.excl-line').value, '');
+    // 折叠时标题带上生效中的标签名，折叠后也知道排除了什么
+    assert.equal($('.excl-sum').textContent, '排除日期 · 中秋节');
+    // 由标签排除的行只标注标签名，且不能单独「恢复」（要动标签本身）
+    assert.equal(rows()[1].querySelector('.hol-tag').textContent, '中秋节');
+    assert.equal(rows()[1].querySelector('[data-row="toggle-exclude"]'), null);
+
+    // 由标签排除的条目，按日期「恢复」恢复不了，只提示去动标签
+    setLine(0, '2026-09-21~2026-09-22');
+    rowOf(0).querySelector('.excl-restore').click();
+    assert.equal($('.count').textContent, '3 条（排除 2）');
+
+    // 停用标签 → 全部恢复；重新启用 → 又自动排除（每次 render 都会重建标签，需重新取）
+    const chipBox = () => $('.holidays').children[0].children[0];
+    chipBox().checked = false;
+    chipBox().dispatch('change');
+    assert.equal($('.count').textContent, '3 条');
+    assert.deepEqual(names(), ['L01-2026-09-20-第3-4节.mp4', 'L02-2026-09-21-第3-4节.mp4', 'L03-2026-09-22-第3-4节.mp4']);
+    assert.equal(values.get('holidays')[0].enabled, false);
+    assert.equal($('.excl-sum').textContent, '排除日期');
+    chipBox().checked = true;
+    chipBox().dispatch('change');
+    assert.equal($('.count').textContent, '3 条（排除 2）');
+
+    // 识别不了的日期不会添加标签；删除标签后彻底恢复
+    setLine(0, '放假');
+    rowOf(0).querySelector('.excl-tag').click();
+    tagNameInput().value = '放假';
+    tagNameInput().dispatch('input');
+    rowOf(0).querySelector('.excl-save').click();
+    assert.equal($('.holidays').children.length, 1);
+    $('.holidays').children[0].children[3].click(); // 删除
+    assert.equal($('.holidays').children.length, 0);
+    assert.ok(!values.has('holidays'));
+    assert.equal($('.count').textContent, '3 条');
+
+    // 第一行左端「＋」加一行，其余行左端是「－」整行删掉；每行分别解除
+    rowOf(0).querySelector('.excl-add').click();
+    assert.equal(lines().length, 2);
+    assert.equal(rowOf(0).querySelector('.excl-del'), null);
+    assert.equal(rowOf(1).querySelector('.excl-add'), null);
+    setLine(0, '2026-09-21');
+    setLine(1, '2026-09-20');
+    rowOf(1).querySelector('.excl-apply').click(); // 只处理第二行
+    assert.equal($('.count').textContent, '3 条（排除 1）');
+    assert.deepEqual(names(), ['L01-2026-09-20-第3-4节.mp4', 'L01-2026-09-21-第3-4节.mp4', 'L02-2026-09-22-第3-4节.mp4']);
+    rowOf(1).querySelector('.excl-del').click();
+    assert.equal(lines().length, 1);
   } finally {
     for (const timer of timers) clearTimeout(timer);
   }

@@ -80,6 +80,77 @@ test('dedupeAndSort: 去重、按 startTime 升序、index 从 1 开始', () => 
   );
 });
 
+test('applyExclusions: 排除项不占号，序号连续，origIndex 保留原序号', () => {
+  const mk = (date, ps, pe, time) => ({ date, periodStart: ps, periodEnd: pe, startTime: time, teacher: 'T' });
+  const { entries } = P.dedupeAndSort([
+    mk('2026-09-30', 3, 4, '2026-09-30 10:10:00'),
+    mk('2026-09-23', 3, 4, '2026-09-23 10:10:00'),
+    mk('2026-09-23', 1, 2, '2026-09-23 08:00:00'),
+  ]);
+  const holiday = P.entryKey(entries[1]); // 中间那条是放假空回放
+  const out = P.applyExclusions(entries, new Set([holiday]));
+  assert.deepEqual(out.map((e) => [e.index, e.excluded, e.origIndex]), [
+    [1, false, 1],
+    [null, true, 2],
+    [2, false, 3],
+  ]);
+  // 空集合等价于原样编号
+  assert.deepEqual(P.applyExclusions(entries).map((e) => e.index), [1, 2, 3]);
+  // 重复调用（排除集合变化）不能把 origIndex 改成重排后的序号
+  const again = P.applyExclusions(P.applyExclusions(entries, new Set([holiday])), new Set([holiday, P.entryKey(entries[2])]));
+  assert.deepEqual(again.map((e) => e.origIndex), [1, 2, 3]);
+  assert.deepEqual(again.map((e) => e.index), [1, null, null]);
+});
+
+test('parseDateRanges: 单日期、区间、多种分隔符、非法输入', () => {
+  assert.deepEqual(P.parseDateRanges('2026-10-01'), { ranges: [{ from: '2026-10-01', to: '2026-10-01' }], invalid: [] });
+  assert.deepEqual(P.parseDateRanges('2026-10-05~2026-10-07'), { ranges: [{ from: '2026-10-05', to: '2026-10-07' }], invalid: [] });
+  assert.deepEqual(P.parseDateRanges('2026-10-05 至 2026-10-07').ranges[0], { from: '2026-10-05', to: '2026-10-07' });
+  assert.deepEqual(P.parseDateRanges('2026/10/05..2026/10/07').ranges[0], { from: '2026-10-05', to: '2026-10-07' });
+  assert.deepEqual(P.parseDateRanges('2026.9.5').ranges[0], { from: '2026-09-05', to: '2026-09-05' }); // 个位数补零
+  const multi = P.parseDateRanges('2026-10-01，2026-10-05~2026-10-07\n2026-11-02');
+  assert.equal(multi.ranges.length, 3);
+  assert.deepEqual(multi.invalid, []);
+  // 非法 token 与起止颠倒
+  const bad = P.parseDateRanges('放假 2026-10-07~2026-10-01');
+  assert.deepEqual(bad.ranges, []);
+  assert.deepEqual(bad.invalid, ['放假', '2026-10-07~2026-10-01']);
+  assert.deepEqual(P.parseDateRanges(''), { ranges: [], invalid: [] });
+});
+
+test('matchesDateRanges: 含端点，区间外为假', () => {
+  const { ranges } = P.parseDateRanges('2026-10-01~2026-10-07, 2026-11-02');
+  assert.equal(P.matchesDateRanges('2026-10-01', ranges), true);
+  assert.equal(P.matchesDateRanges('2026-10-04', ranges), true);
+  assert.equal(P.matchesDateRanges('2026-10-07', ranges), true);
+  assert.equal(P.matchesDateRanges('2026-09-30', ranges), false);
+  assert.equal(P.matchesDateRanges('2026-10-08', ranges), false);
+  assert.equal(P.matchesDateRanges('2026-11-02', ranges), true);
+  assert.equal(P.matchesDateRanges('', ranges), false);
+});
+
+test('holidayRanges / collectExclusions: 全局标签与手动排除合并，停用的标签不生效', () => {
+  const holidays = [
+    { name: '中秋节', ranges: [{ from: '2026-09-25', to: '2026-09-27' }], enabled: true },
+    { name: '国庆节', ranges: [{ from: '2026-10-01', to: '2026-10-07' }], enabled: false },
+  ];
+  assert.deepEqual(P.holidayRanges(holidays), [{ from: '2026-09-25', to: '2026-09-27', name: '中秋节' }]);
+  assert.deepEqual(P.holidayRanges(), []);
+
+  const entries = [
+    { date: '2026-09-20', periodStart: 3, periodEnd: 4, startTime: '2026-09-20 10:10:00' },
+    { date: '2026-09-26', periodStart: 3, periodEnd: 4, startTime: '2026-09-26 10:10:00' },
+    { date: '2026-10-01', periodStart: 3, periodEnd: 4, startTime: '2026-10-01 10:10:00' },
+  ];
+  const map = P.collectExclusions(entries, new Set([P.entryKey(entries[0])]), P.holidayRanges(holidays));
+  assert.equal(map.size, 2); // 手动排除 1 条 + 中秋节命中 1 条
+  assert.equal(map.get(P.entryKey(entries[0])), ''); // 手动排除没有标签名
+  assert.equal(map.get(P.entryKey(entries[1])), '中秋节');
+  assert.equal(map.has(P.entryKey(entries[2])), false); // 国庆节已停用
+
+  assert.deepEqual(P.applyExclusions(entries, new Set(map.keys())).map((e) => e.index), [null, null, 1]);
+});
+
 test('formatFilename: 默认模板', () => {
   const e = { index: 3, date: '2026-09-30', periodStart: 3, periodEnd: 4, startTime: '2026-09-30 10:10:00', teacher: '陈向群' };
   assert.equal(P.formatFilename(P.DEFAULT_TEMPLATE, e), 'L03-2026-09-30-第3-4节.mp4');
