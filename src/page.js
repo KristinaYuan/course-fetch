@@ -63,14 +63,32 @@ function extractCols(tr) {
   };
 }
 
+/** Blackboard 的“前进”是跳页表单的提交按钮，不能当成“下一页”。 */
+function nextPagePriority(a, label) {
+  const id = a.getAttribute('id') || '';
+  const classes = (a.getAttribute('class') || '').split(/\s+/);
+  if (/(?:^|_)gobut(?:_|$)/i.test(id) || classes.includes('gotolink')) return 0;
+  if (a.getAttribute('aria-disabled') === 'true') return 0;
+
+  if (/(?:^|_)nextpage(?:_|$)/i.test(id)) return 2;
+  if ((a.getAttribute('rel') || '').toLowerCase().split(/\s+/).includes('next')) return 2;
+  const labels = [label, a.getAttribute('title'), a.getAttribute('aria-label')];
+  if (typeof a.querySelectorAll === 'function') {
+    for (const img of toList(a.querySelectorAll('img'))) labels.push(img.getAttribute('alt'));
+  }
+  if (labels.some((s) => /^(下一页|next(?:\s+page)?)$/i.test(normalizeText(s)))) return 2;
+  return label === '前进' ? 1 : 0; // 兼容旧版纯文字分页
+}
+
 /**
- * 从一个 Document 中提取“观看”行和“前进”链接。
+ * 从一个 Document 中提取“观看”行和“下一页”链接（兼容旧版“前进”）。
  * 只依赖 querySelectorAll / getAttribute / closest / textContent，测试中可用假对象。
  */
 export function extractPage(doc, baseUrl) {
   const rows = [];
   const issues = [];
   let next = null;
+  let nextPriority = 0;
   for (const a of toList(doc.querySelectorAll('a'))) {
     const label = textOf(a);
     if (label === '观看') {
@@ -82,8 +100,15 @@ export function extractPage(doc, baseUrl) {
       const s = extractCols(tr);
       if (s) rows.push({ cols: s.cols, watchUrl: linkTarget(s.link || a, baseUrl) });
       else rows.push({ text: rowText(tr), watchUrl: linkTarget(a, baseUrl) });
-    } else if (label === '前进' && !next) {
-      next = { url: linkTarget(a, baseUrl), hasHref: a.getAttribute('href') != null };
+    } else {
+      const priority = nextPagePriority(a, label);
+      if (priority > 0 && priority >= nextPriority) {
+        const candidate = { url: linkTarget(a, baseUrl), hasHref: a.getAttribute('href') != null };
+        if (priority > nextPriority || !next.url) {
+          next = candidate;
+          nextPriority = priority;
+        }
+      }
     }
   }
   return { rows, next, issues };
@@ -95,9 +120,9 @@ function rowKey(row) {
 }
 
 /**
- * 从第一页开始沿“前进”翻页，汇总、解析、去重。
+ * 从第一页开始沿“下一页”（或旧版“前进”）翻页，汇总、解析、去重。
  * fetchDoc(url) => Promise<Document>，由调用方注入（浏览器用 fetch，测试用假对象）。
- * 教学网末页仍有“前进”链接，请求后返回同一页内容：若新页面没有任何新录像，视为已到末页，
+ * 旧版教学网末页仍有“前进”链接，请求后返回同一页内容：若新页面没有任何新录像，视为已到末页，
  * 不计入页数和结果。visited 仍用于防止真正的 URL 循环。
  */
 export async function crawlCourse({ firstDoc, firstUrl, fetchDoc, maxPages = 50, onProgress = () => {} }) {
@@ -121,13 +146,13 @@ export async function crawlCourse({ firstDoc, firstUrl, fetchDoc, maxPages = 50,
   while (page.next) {
     if (!page.next.url) {
       if (page.next.hasHref) {
-        warnings.push(`第 ${pageNo} 页的“前进”链接是脚本跳转，无法自动请求；只收集到前 ${pageNo} 页`);
+        warnings.push(`第 ${pageNo} 页的翻页链接是脚本跳转，无法自动请求；只收集到前 ${pageNo} 页`);
       }
       break; // 没有 href 通常表示已经是最后一页
     }
     const url = stripHash(page.next.url);
     if (visited.has(url)) {
-      warnings.push('“前进”链接指向已读取过的页面，停止翻页');
+      warnings.push('翻页链接指向已读取过的页面，停止翻页');
       break;
     }
     if (pageNo >= maxPages) {

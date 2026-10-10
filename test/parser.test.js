@@ -409,7 +409,7 @@ test('crawlCourse：真正的 URL 循环仍被 visited 拦截', async () => {
   const r = await P.crawlCourse({ firstDoc: listPage(EIGHT.slice(4), p2), firstUrl: BASE, fetchDoc: f.fn });
   assert.equal(r.pages, 2);
   assert.equal(r.entries.length, 8);
-  assert.deepEqual(r.warnings, ['“前进”链接指向已读取过的页面，停止翻页']);
+  assert.deepEqual(r.warnings, ['翻页链接指向已读取过的页面，停止翻页']);
 });
 
 test('crawlCourse：分页请求失败时保留已有结果', async () => {
@@ -424,4 +424,120 @@ test('crawlCourse：同一页内的重复录像仍会提示', async () => {
   const r = await P.crawlCourse({ firstDoc: listPage([...EIGHT, EIGHT[0]]), firstUrl: BASE, fetchDoc: async () => null });
   assert.equal(r.entries.length, 8);
   assert.deepEqual(r.warnings, ['发现 1 条重复录像，已合并']);
+});
+
+// Blackboard 的下一页只有图片；隐藏的“前进”只提交跳页输入框，没有 startIndex。
+const PAGING_PATH = '/webapps/bb-streammedia-hqy-BBLEARN/videoList.action?sortDir=ASCENDING&numResults=25&editPaging=false&course_id=_73329_1&mode=view';
+const pagingUrl = (offset) => new URL(`${PAGING_PATH}&startIndex=${offset}`, BASE).href;
+
+function blackboardPager(offset, totalPages, position = 'bot') {
+  const pageNumber = offset / 25 + 1;
+  const button = (kind, title, startIndex) => h('a', {
+    id: `listContainer_${kind}page_${position}`, class: 'pagelink', title,
+    href: `${PAGING_PATH}&startIndex=${startIndex}`, role: 'button',
+  }, h('img', { src: '/images/ci/ng/small_next.gif', alt: title }));
+  return h('li', { class: 'inventory_paging' },
+    h('div', { id: `listContainer_navpaging_${position}` },
+      h('div', { class: 'jumpToLinkContainer' },
+        h('a', { href: '#', class: 'jumpToPageOpen', title: '跳转至页面' },
+          '页面 ', h('span', { class: 'currentPage' }, String(pageNumber)), ` 共 ${totalPages}`)),
+      ...(offset ? [button('first', '第一页', 0), button('prev', '上一页', offset - 25)] : []),
+      ...(pageNumber < totalPages ? [button('next', '下一页', offset + 25), button('last', '最后一页', (totalPages - 1) * 25)] : [])),
+    h('div', { style: 'display: none;', id: `listContainer_jumptopage_${position}` },
+      h('input', { type: 'text', value: String(pageNumber), name: 'pageIndex' }),
+      h('a', { class: 'gotolink', id: `listContainer_gobut_${position}`, href: PAGING_PATH }, '前进')));
+}
+
+function blackboardPage(dates, offset, totalPages) {
+  return mkDoc(blackboardPager(offset, totalPages, 'top'),
+    h('table', {}, h('tbody', {}, ...lectureRows(dates))),
+    blackboardPager(offset, totalPages));
+}
+
+test('extractPage：图片下一页优先于文字前进，保留 startIndex 和所有查询参数', () => {
+  const doc = mkDoc(h('a', { href: PAGING_PATH }, '前进'), blackboardPager(0, 3));
+  assert.equal(P.extractPage(doc, pagingUrl(0)).next.url, pagingUrl(25));
+});
+
+test('extractPage：分别按 id、title、aria-label、rel、图片 alt 和文本识别下一页', () => {
+  const variants = [
+    h('a', { id: 'listContainer_nextpage_bot' }),
+    h('a', { title: '下一页' }),
+    h('a', { 'aria-label': '下一页' }),
+    h('a', { rel: 'nofollow next' }),
+    h('a', {}, h('img', { alt: '下一页' })),
+    h('a', {}, ' 下一页 '),
+  ];
+  for (const a of variants) {
+    a.attrs.href = `${PAGING_PATH}&startIndex=25`;
+    assert.equal(P.extractPage(mkDoc(a), pagingUrl(0)).next.url, pagingUrl(25));
+  }
+});
+
+test('extractPage：末页忽略隐藏跳页表单的前进和上一页/第一页', () => {
+  assert.equal(P.extractPage(blackboardPage(EIGHT, 25, 2), pagingUrl(25)).next, null);
+  for (const attrs of [{ id: 'listContainer_gobut_top' }, { class: 'gotolink' }]) {
+    const doc = mkDoc(h('a', { ...attrs, href: PAGING_PATH }, '前进'));
+    assert.equal(P.extractPage(doc, pagingUrl(25)).next, null);
+  }
+});
+
+test('extractPage：跳过禁用的下一页，使用底部有效链接', () => {
+  const doc = mkDoc(h('a', { title: '下一页', 'aria-disabled': 'true', href: '#' }),
+    h('a', { id: 'listContainer_nextpage_top' }), blackboardPager(0, 2));
+  assert.equal(P.extractPage(doc, pagingUrl(0)).next.url, pagingUrl(25));
+});
+
+test('crawlCourse：Blackboard 两页通过 startIndex=25 收集全部录像，末页不请求跳页表单', async () => {
+  const dates = Array.from({ length: 28 }, (_, i) => `2026-09-${String(i + 1).padStart(2, '0')}`);
+  const f = fakeFetch({ [pagingUrl(25)]: blackboardPage(dates.slice(25), 25, 2) });
+  const progress = [];
+  const r = await P.crawlCourse({
+    firstDoc: blackboardPage(dates.slice(0, 25), 0, 2), firstUrl: pagingUrl(0), fetchDoc: f.fn,
+    onProgress: (message) => progress.push(message),
+  });
+  assert.equal(r.status, '共 2 页，28 条录像');
+  assert.deepEqual(r.entries.map((e) => e.date), dates);
+  assert.deepEqual(r.entries.map((e) => e.index), dates.map((_, i) => i + 1));
+  assert.deepEqual(r.entries.map((e) => e.page), dates.map((_, i) => i < 25 ? 1 : 2));
+  assert.deepEqual(r.warnings, []);
+  assert.deepEqual(f.calls, [pagingUrl(25)]);
+  assert.deepEqual(progress, ['正在读取第 2 页…']);
+});
+
+test('crawlCourse：Blackboard 三页依次读取而不跳到末页，跨页重复仍去重排序', async () => {
+  const f = fakeFetch({
+    [pagingUrl(25)]: blackboardPage(EIGHT.slice(2, 5), 25, 3),
+    [pagingUrl(50)]: blackboardPage(EIGHT.slice(0, 3), 50, 3),
+  });
+  const r = await P.crawlCourse({
+    firstDoc: blackboardPage(EIGHT.slice(5).reverse(), 0, 3), firstUrl: pagingUrl(0), fetchDoc: f.fn,
+  });
+  assert.equal(r.status, '共 3 页，8 条录像');
+  assert.deepEqual(r.entries.map((e) => e.date), EIGHT);
+  assert.deepEqual(r.warnings, ['发现 1 条重复录像，已合并']);
+  assert.deepEqual(f.calls, [pagingUrl(25), pagingUrl(50)]);
+});
+
+test('crawlCourse：Blackboard 单页不请求隐藏的前进', async () => {
+  const f = fakeFetch({});
+  const r = await P.crawlCourse({ firstDoc: blackboardPage(EIGHT, 0, 1), firstUrl: pagingUrl(0), fetchDoc: f.fn });
+  assert.equal(r.status, '共 1 页，8 条录像');
+  assert.deepEqual(r.warnings, []);
+  assert.deepEqual(f.calls, []);
+});
+
+test('crawlCourse：Blackboard 翻页请求失败或达到页数上限时保留已有结果并提示', async () => {
+  const firstDoc = blackboardPage(EIGHT, 0, 2);
+  const f = fakeFetch({});
+  const failed = await P.crawlCourse({ firstDoc, firstUrl: pagingUrl(0), fetchDoc: f.fn });
+  assert.equal(failed.entries.length, 8);
+  assert.equal(failed.pages, 1);
+  assert.match(failed.warnings[0], /读取第 2 页失败（HTTP 500）/);
+  assert.deepEqual(f.calls, [pagingUrl(25)]);
+  f.calls.length = 0;
+  const capped = await P.crawlCourse({ firstDoc, firstUrl: pagingUrl(0), fetchDoc: f.fn, maxPages: 1 });
+  assert.equal(capped.entries.length, 8);
+  assert.deepEqual(capped.warnings, ['已达到最大页数 1，停止翻页']);
+  assert.deepEqual(f.calls, []);
 });

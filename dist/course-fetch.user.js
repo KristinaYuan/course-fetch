@@ -1013,10 +1013,25 @@
       link: values[2] ? values[2].querySelector("a") : null
     };
   }
+  function nextPagePriority(a, label) {
+    const id = a.getAttribute("id") || "";
+    const classes = (a.getAttribute("class") || "").split(/\s+/);
+    if (/(?:^|_)gobut(?:_|$)/i.test(id) || classes.includes("gotolink")) return 0;
+    if (a.getAttribute("aria-disabled") === "true") return 0;
+    if (/(?:^|_)nextpage(?:_|$)/i.test(id)) return 2;
+    if ((a.getAttribute("rel") || "").toLowerCase().split(/\s+/).includes("next")) return 2;
+    const labels = [label, a.getAttribute("title"), a.getAttribute("aria-label")];
+    if (typeof a.querySelectorAll === "function") {
+      for (const img of toList(a.querySelectorAll("img"))) labels.push(img.getAttribute("alt"));
+    }
+    if (labels.some((s) => /^(下一页|next(?:\s+page)?)$/i.test(normalizeText(s)))) return 2;
+    return label === "前进" ? 1 : 0;
+  }
   function extractPage(doc, baseUrl) {
     const rows = [];
     const issues = [];
     let next = null;
+    let nextPriority = 0;
     for (const a of toList(doc.querySelectorAll("a"))) {
       const label = textOf(a);
       if (label === "观看") {
@@ -1028,8 +1043,15 @@
         const s = extractCols(tr);
         if (s) rows.push({ cols: s.cols, watchUrl: linkTarget(s.link || a, baseUrl) });
         else rows.push({ text: rowText(tr), watchUrl: linkTarget(a, baseUrl) });
-      } else if (label === "前进" && !next) {
-        next = { url: linkTarget(a, baseUrl), hasHref: a.getAttribute("href") != null };
+      } else {
+        const priority = nextPagePriority(a, label);
+        if (priority > 0 && priority >= nextPriority) {
+          const candidate = { url: linkTarget(a, baseUrl), hasHref: a.getAttribute("href") != null };
+          if (priority > nextPriority || !next.url) {
+            next = candidate;
+            nextPriority = priority;
+          }
+        }
       }
     }
     return { rows, next, issues };
@@ -1058,13 +1080,13 @@
     while (page.next) {
       if (!page.next.url) {
         if (page.next.hasHref) {
-          warnings.push(`第 ${pageNo} 页的“前进”链接是脚本跳转，无法自动请求；只收集到前 ${pageNo} 页`);
+          warnings.push(`第 ${pageNo} 页的翻页链接是脚本跳转，无法自动请求；只收集到前 ${pageNo} 页`);
         }
         break;
       }
       const url = stripHash(page.next.url);
       if (visited.has(url)) {
-        warnings.push("“前进”链接指向已读取过的页面，停止翻页");
+        warnings.push("翻页链接指向已读取过的页面，停止翻页");
         break;
       }
       if (pageNo >= maxPages) {

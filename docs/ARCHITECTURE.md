@@ -6,7 +6,7 @@
 
 ```
 课堂实录列表页（videoList.action）
-  │ page.js    解析当前页 + 沿「前进」翻页 → parser.js 去重、排序、编号、命名
+  │ page.js    解析当前页 + 沿「下一页」翻页 → parser.js 去重、排序、编号、命名
   │ ui.js      Shadow DOM 面板
   ▼
 点击「下载」/「下载选中」
@@ -181,7 +181,7 @@ npm run ts2mp4 -- in.ts [out.mp4]   # 离线转封装
 ## 技术限制
 
 - 教学网加载了 Prototype.js，它会覆盖 `Array.from` 等全局方法。处理 DOM 集合时只用普通循环，不要使用 `Array.from(list, mapFn)`。
-- 「前进」如果是 `javascript:` 跳转并且提取不出 URL，就无法自动翻页。
+- 分页优先识别「下一页」按钮（含图片按钮），兼容旧版文字「前进」；忽略跳页表单里的「前进」，末页没有下一页时停止。翻页链接如果是 `javascript:` 跳转并且提取不出 URL，就无法自动翻页。
 - 分页通过同源 `fetch` 获取，依赖当前登录状态。
 - 课程名按 Blackboard 常见元素启发式识别。
 - 暂不支持 `EXT-X-BYTERANGE`、`EXT-X-MAP`（fMP4）和直播（没有 `EXT-X-ENDLIST` 时只下载当时列表中的分片）。
