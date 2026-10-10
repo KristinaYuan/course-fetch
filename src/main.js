@@ -10,6 +10,9 @@ import {
   parseCourseId,
   buildManifest,
   safeStringify,
+  applyExclusions,
+  collectExclusions,
+  holidayRanges,
 } from './parser.js';
 import { crawlCourse, detectCourseName, fetchDocument, locatePlaylist } from './page.js';
 import { abortError, downloadHls, gmRequest, saveBlob, withTimeout } from './downloader.js';
@@ -42,6 +45,8 @@ function listPage() {
   console.info(`[Course Fetch] v${VERSION} loaded`);
 
   const courseId = parseCourseId(location.href);
+  const savedExcluded = store.get(`excluded:${courseId}`, []);
+  const savedHolidays = store.get('holidays', []); // 全局节假日标签，所有课程共享
   const state = {
     course: store.get(`course:${courseId}`, '') || detectCourseName() || (courseId ? `course_${courseId}` : ''),
     template: store.get('template', DEFAULT_TEMPLATE),
@@ -53,6 +58,10 @@ function listPage() {
     warnings: [],
     pages: 0,
     selected: new Set(), // entryKey
+    // entryKey；本课程手动排除的条目（放假空回放等），按课程记住
+    excluded: new Set(Array.isArray(savedExcluded) ? savedExcluded : []),
+    // [{ name, ranges, enabled }]；全局节假日标签，跨课程自动生效
+    holidays: Array.isArray(savedHolidays) ? savedHolidays : [],
     scanning: false,
     status: '',
     download: null, // { key, filename, controller, aborting, phase, done, total, bytes, ... }，仅内存
@@ -61,7 +70,9 @@ function listPage() {
   const requestLimiter = createRequestLimiter(BATCH_LIMITS.requests);
   const limitedRequest = requestLimiter.wrap(gmRequest);
 
-  const filenameOf = (e) => formatFilename(state.template, e, { course: state.course });
+  // 被排除的条目保留原序号取名（index 为 null，直接用会得到 L00），便于对照那一格本该叫什么。
+  const numbered = (e) => (e.excluded ? { ...e, index: e.origIndex } : e);
+  const filenameOf = (e) => formatFilename(state.template, numbered(e), { course: state.course });
   const outputNameOf = (e) => withExtension(filenameOf(e), state.format);
 
   // ---- 扫描 ----------------------------------------------------------------------
@@ -79,7 +90,10 @@ function listPage() {
     const keys = new Set(result.entries.map(entryKey));
     state.selected = new Set([...state.selected].filter((k) => keys.has(k)));
     Object.assign(state, {
-      entries: result.entries,
+      entries: applyExclusions(
+        result.entries,
+        new Set(collectExclusions(result.entries, state.excluded, holidayRanges(state.holidays)).keys()),
+      ),
       duplicates: result.duplicates,
       failures: result.failures,
       warnings: result.warnings,
@@ -105,12 +119,13 @@ function listPage() {
   }
 
   function exportManifest() {
-    if (!state.entries.length) return ui.flash('没有可导出的条目');
+    const entries = state.entries.filter((e) => !e.excluded);
+    if (!entries.length) return ui.flash('没有可导出的条目');
     const manifest = buildManifest({
       course: state.course,
       courseId,
       template: state.template,
-      entries: state.entries,
+      entries,
     });
     const blob = new Blob([safeStringify(manifest)], { type: 'application/json' });
     saveBlob(blob, sanitizeFilename(`${state.course || courseId || 'course'}-manifest.json`));

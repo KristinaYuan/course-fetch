@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Course Fetch
 // @namespace    https://github.com/MiniYuanBot/course-fetch
-// @version      0.4.1
+// @version      0.5.0
 // @description  北大教学网课堂实录：枚举整门课程录像、排序、命名、导出 manifest，支持单条和批量下载，无损保存为 MP4。
 // @homepageURL  https://github.com/MiniYuanBot/course-fetch
 // @supportURL   https://github.com/MiniYuanBot/course-fetch/issues
@@ -43,6 +43,7 @@
   var DATETIME_RE = /(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/;
   var TIME_RE = new RegExp("时间\\s*[:：]\\s*" + DATETIME_RE.source);
   var TEACHER_RE = /教师\s*[:：]\s*(.*?)\s*(?:操作\s*[:：]|观看|$)/;
+  var DATE_RANGE_RE = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:~(\d{4})[-/.](\d{1,2})[-/.](\d{1,2}))?$/;
   var pad2 = (n) => String(n).padStart(2, "0");
   var ymd = (y, m, d) => `${y}-${pad2(m)}-${pad2(d)}`;
   function normalizeText(s) {
@@ -119,6 +120,60 @@
     }
     const sorted = [...seen.values()].sort(compareEntries).map((e, i) => ({ ...e, index: i + 1 }));
     return { entries: sorted, duplicates };
+  }
+  var EMPTY_SET = /* @__PURE__ */ new Set();
+  function applyExclusions(entries, excludedKeys = EMPTY_SET) {
+    let n = 0;
+    return entries.map((e) => {
+      const excluded = excludedKeys.has(entryKey(e));
+      return { ...e, excluded, origIndex: e.origIndex ?? e.index, index: excluded ? null : ++n };
+    });
+  }
+  function parseDateRanges(text) {
+    const ranges = [];
+    const invalid = [];
+    const normalized = String(text == null ? "" : text).replace(/\s*(?:~|～|至|到|\.\.)\s*/g, "~");
+    for (const token of normalized.split(/[,，、;；\s]+/).filter(Boolean)) {
+      const m = DATE_RANGE_RE.exec(token);
+      if (!m) {
+        invalid.push(token);
+        continue;
+      }
+      const from = ymd(m[1], m[2], m[3]);
+      const to = m[4] ? ymd(m[4], m[5], m[6]) : from;
+      if (to < from) {
+        invalid.push(token);
+        continue;
+      }
+      ranges.push({ from, to });
+    }
+    return { ranges, invalid };
+  }
+  function inRange(date, range) {
+    return date >= range.from && date <= range.to;
+  }
+  function matchesDateRanges(date, ranges) {
+    return ranges.some((r) => inRange(date, r));
+  }
+  function holidayRanges(holidays = []) {
+    const out = [];
+    for (const h of holidays) {
+      if (!h || h.enabled === false) continue;
+      for (const r of h.ranges || []) out.push({ from: r.from, to: r.to, name: h.name });
+    }
+    return out;
+  }
+  function collectExclusions(entries, manualKeys = EMPTY_SET, ranges = []) {
+    const out = /* @__PURE__ */ new Map();
+    for (const e of entries) {
+      const key = entryKey(e);
+      if (manualKeys.has(key)) out.set(key, "");
+      else if (ranges.length) {
+        const hit = ranges.find((r) => inRange(e.date, r));
+        if (hit) out.set(key, hit.name || "");
+      }
+    }
+    return out;
   }
   function sanitizeFilename(name) {
     const s = String(name).replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").replace(/\s+/g, " ").trim().replace(/[. ]+$/, "");
@@ -2328,6 +2383,27 @@
   th { position: sticky; top: 0; background: #fafafa; font-weight: 600; }
   td.fn { font-family: ui-monospace, Menlo, Consolas, monospace; white-space: normal; word-break: break-all; }
   .muted { color: #888; }
+  tr.excluded { color: #999; }
+  tr.excluded .fn { text-decoration: line-through; }
+  .excl-box { color: #555; }
+  .excl-box > summary { cursor: pointer; width: fit-content; }
+  .excl-bd { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 0 10px; }
+  .excl-rows { display: flex; flex-direction: column; gap: 2px; }
+  .excl-item { display: flex; flex-direction: column; gap: 2px; }
+  .excl-row { display: flex; align-items: center; gap: 4px; }
+  .excl-row input[type=text] { flex: 1; min-width: 0; }
+  .excl-add, .excl-del { border: none; background: none; padding: 0; width: 14px; font-weight: 600; color: #1a5fb4; }
+  .excl-del { color: #999; }
+  .excl-name { display: flex; align-items: center; gap: 4px; margin-left: 18px; }
+  .excl-name input[type=text] { flex: 0 0 160px; }
+  .excl-add { border: none; background: none; color: #1a5fb4; padding: 0; width: 14px; font-weight: 600; }
+  .excl-acts { display: flex; gap: 4px; flex: none; }
+  .holidays { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .holidays:empty { display: none; }
+  .hol { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; background: #f2f4f7; border-radius: 10px; }
+  .hol.off { color: #999; background: #fafafa; }
+  .hol .dates { color: #888; font-size: 11px; }
+  .hol-tag { color: #888; font-size: 11px; }
   .dl { border: 1px solid #cfe0f5; background: #f5f9ff; border-radius: 4px; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
   .dl[hidden] { display: none; }
   .dl-top { display: flex; align-items: center; gap: 8px; }
@@ -2354,6 +2430,13 @@
       <label><span>命名模板</span><input type="text" class="tpl"><button class="reset-tpl">重置</button></label>
       <div class="hint">变量：{index:02d} {date} {YYYY} {YY} {MM} {DD} {periodStart} {periodEnd} {teacher} {course} {time} {startTime}</div>
       <label><span>输出格式</span><select class="fmt"><option value="mp4">MP4（无损转封装，推荐）</option><option value="ts">TS（原始流）</option></select></label>
+      <details class="excl-box">
+        <summary class="excl-sum">排除日期</summary>
+        <div class="excl-bd">
+          <div class="excl-rows"></div>
+          <div class="holidays"></div>
+        </div>
+      </details>
       <div class="bar">
         <button data-act="scan">重新扫描</button>
         <button data-act="all">全选</button>
@@ -2414,6 +2497,9 @@
       course: $(".course"),
       tpl: $(".tpl"),
       fmt: $(".fmt"),
+      exclSummary: $(".excl-sum"),
+      exclRows: $(".excl-rows"),
+      holidays: $(".holidays"),
       status: $(".status"),
       warn: $(".warn"),
       tbody: $("tbody"),
@@ -2431,6 +2517,31 @@
       }
     };
     const selectedEntries = () => state.entries.filter((e) => state.selected.has(entryKey(e)));
+    const selectableEntries = () => state.entries.filter((e) => !e.excluded);
+    const exclusionsOf = (entries) => collectExclusions(entries, state.excluded, holidayRanges(state.holidays));
+    function applyExcluded() {
+      const labels = exclusionsOf(state.entries);
+      state.entries = applyExclusions(state.entries, new Set(labels.keys()));
+      for (const e of state.entries) if (e.excluded) state.selected.delete(entryKey(e));
+    }
+    function setExcluded(next) {
+      state.excluded = next;
+      const keys = [...next];
+      if (keys.length) store.set(`excluded:${courseId}`, keys);
+      else store.delete(`excluded:${courseId}`);
+      applyExcluded();
+      render();
+    }
+    function setHolidays(next) {
+      state.holidays = next;
+      if (next.length) store.set("holidays", next);
+      else store.delete("holidays");
+      applyExcluded();
+      render();
+    }
+    let exclLines = [""];
+    let nameFor = null;
+    let tagName = "";
     let flashTimer = null;
     function setStatus(msg) {
       state.status = msg;
@@ -2462,7 +2573,13 @@
         if (!state.batch.running) return `批量结束 · 成功 ${p.completed}/${p.total}`;
         return `批量 ${Math.floor(p.percent)}% · ${p.settled}/${p.total}`;
       }
-      return state.scanning ? "扫描中…" : `${state.entries.length} 条`;
+      if (state.scanning) return "扫描中…";
+      const excluded = state.entries.length - selectableEntries().length;
+      return excluded ? `${state.entries.length} 条（排除 ${excluded}）` : `${state.entries.length} 条`;
+    }
+    function summaryText() {
+      const active = state.holidays.filter((h) => h.enabled !== false).map((h) => h.name);
+      return active.length ? `排除日期 · ${active.join("、")}` : "排除日期";
     }
     function downloadButtonLabel(key) {
       const d = state.download;
@@ -2566,19 +2683,90 @@
       const busy = !!state.download || !!state.batch?.running;
       root.querySelectorAll(".bar button").forEach((b) => b.disabled = state.scanning || busy && ["scan", "download"].includes(b.dataset.act));
       ui.fmt.disabled = busy;
+      ui.exclSummary.textContent = summaryText();
+      ui.exclRows.replaceChildren(...exclLines.map((line, i) => {
+        const item = document.createElement("div");
+        item.className = "excl-item";
+        const row = document.createElement("div");
+        row.className = "excl-row";
+        const step = Object.assign(document.createElement("button"), {
+          className: i ? "excl-del" : "excl-add",
+          textContent: i ? "−" : "+",
+          title: i ? "删掉这一行" : "再加一行日期",
+          disabled: busy
+        });
+        step.dataset[i ? "exclDel" : "exclAdd"] = String(i);
+        const input = Object.assign(document.createElement("input"), { type: "text", value: line, disabled: busy });
+        input.className = "excl-line";
+        input.dataset.exclLine = String(i);
+        if (!i) input.placeholder = "2026-10-01 或 2026-10-01~2026-10-07";
+        const acts = document.createElement("span");
+        acts.className = "excl-acts";
+        for (const [cls, key, label, title] of [
+          ["excl-apply", "exclApply", "排除", "排除当前课程中落在这一行日期的录像"],
+          ["excl-restore", "exclRestore", "恢复", "恢复这一行日期对应的条目（由标签排除的要停用或删除标签）"],
+          ["excl-tag", "exclTag", "存为标签", "把这一行的日期存成标签，对所有课程自动生效"]
+        ]) {
+          const b = Object.assign(document.createElement("button"), { className: cls, textContent: label, title, disabled: busy });
+          b.dataset[key] = String(i);
+          acts.appendChild(b);
+        }
+        row.appendChild(step);
+        row.appendChild(input);
+        row.appendChild(acts);
+        item.appendChild(row);
+        if (nameFor === i) {
+          const wrap = document.createElement("div");
+          wrap.className = "excl-name";
+          const name = Object.assign(document.createElement("input"), { type: "text", value: tagName, placeholder: "名称", disabled: busy });
+          name.className = "tag-name";
+          name.dataset.exclName = String(i);
+          const save = Object.assign(document.createElement("button"), { className: "excl-save", textContent: "保存", disabled: busy });
+          save.dataset.exclSave = String(i);
+          wrap.appendChild(name);
+          wrap.appendChild(save);
+          item.appendChild(wrap);
+        }
+        return item;
+      }));
       ui.warn.hidden = !state.warnings.length;
       ui.warn.querySelector("summary").textContent = `${state.warnings.length} 条提示`;
       ui.warn.querySelector("ul").replaceChildren(
         ...state.warnings.map((w) => Object.assign(document.createElement("li"), { textContent: w }))
       );
+      ui.holidays.replaceChildren(...state.holidays.map((h, i) => {
+        const chip = document.createElement("span");
+        chip.className = h.enabled === false ? "hol off" : "hol";
+        const box2 = Object.assign(document.createElement("input"), {
+          type: "checkbox",
+          checked: h.enabled !== false
+        });
+        box2.dataset.hol = String(i);
+        box2.title = "停用后不再自动排除";
+        const name = Object.assign(document.createElement("b"), { textContent: h.name });
+        const dates = Object.assign(document.createElement("span"), {
+          className: "dates",
+          textContent: h.ranges.map((r) => r.from === r.to ? r.from : `${r.from}~${r.to}`).join(" ")
+        });
+        const del = Object.assign(document.createElement("button"), { className: "link", textContent: "删除" });
+        del.dataset.holDel = String(i);
+        for (const node of [box2, name, dates, del]) chip.appendChild(node);
+        return chip;
+      }));
+      const labels = exclusionsOf(state.entries);
       const frag = document.createDocumentFragment();
       for (const e of state.entries) {
         const key = entryKey(e);
         const tr = document.createElement("tr");
         tr.dataset.key = key;
+        if (e.excluded) tr.className = "excluded";
         const cells = [
-          Object.assign(document.createElement("input"), { type: "checkbox", checked: state.selected.has(key) }),
-          String(e.index),
+          Object.assign(document.createElement("input"), {
+            type: "checkbox",
+            checked: !e.excluded && state.selected.has(key),
+            disabled: e.excluded
+          }),
+          e.excluded ? "—" : String(e.index),
           outputNameOf(e),
           e.startTime ? e.startTime.slice(0, 16) : e.date,
           e.teacher
@@ -2592,8 +2780,26 @@
         });
         const act = document.createElement("td");
         const otherDownload = state.download && state.download.key !== key || state.batch?.running;
-        act.innerHTML = `<button class="link" data-row="open"${e.watchUrl ? "" : ' disabled title="无可用链接"'}>打开</button><button class="link" data-row="copy">复制名</button><button class="link" data-row="download"${!e.watchUrl || otherDownload ? " disabled" : ""}${state.download && !otherDownload ? ' title="点击取消"' : ""}></button>`;
-        act.lastChild.textContent = downloadButtonLabel(key);
+        act.innerHTML = `<button class="link" data-row="open"${e.watchUrl ? "" : ' disabled title="无可用链接"'}>打开</button><button class="link" data-row="copy">复制名</button>`;
+        const holiday = labels.get(key);
+        const exclude = document.createElement(holiday ? "span" : "button");
+        if (holiday) {
+          exclude.className = "hol-tag";
+          exclude.textContent = holiday;
+          exclude.title = `由「${holiday}」标签自动排除；停用或删除该标签即可恢复`;
+        } else {
+          exclude.className = "link";
+          exclude.dataset.row = "toggle-exclude";
+          exclude.textContent = e.excluded ? "恢复" : "排除";
+        }
+        act.appendChild(exclude);
+        const download = document.createElement("button");
+        download.className = "link";
+        download.dataset.row = "download";
+        if (!e.watchUrl || otherDownload) download.disabled = true;
+        if (state.download && !otherDownload) download.title = "点击取消";
+        download.textContent = downloadButtonLabel(key);
+        act.appendChild(download);
         const taskState = document.createElement("span");
         taskState.className = "task-state";
         const cancel = document.createElement("button");
@@ -2612,7 +2818,8 @@
         frag.appendChild(tr);
       }
       ui.tbody.replaceChildren(frag);
-      ui.chkAll.checked = state.entries.length > 0 && state.selected.size === state.entries.length;
+      const selectable = selectableEntries().length;
+      ui.chkAll.checked = selectable > 0 && state.selected.size === selectable;
       updateDownloadUI();
     }
     $(".hd").addEventListener("click", () => {
@@ -2641,19 +2848,135 @@
       ui.tpl.value = state.template;
       render();
     });
+    const rowTag = (i) => exclLines.length > 1 ? `第 ${i + 1} 行：` : "";
+    const invalidTail = (invalid) => invalid.length ? `（未识别：${invalid.join(" ")}）` : "";
+    function parseLine(i) {
+      const { ranges, invalid } = parseDateRanges(exclLines[i] || "");
+      if (!ranges.length) {
+        flash(invalid.length ? `${rowTag(i)}没识别出日期：${invalid.join(" ")}` : `${rowTag(i)}请先填写日期`);
+        return null;
+      }
+      return { ranges, invalid };
+    }
+    function applyLine(i) {
+      const parsed = parseLine(i);
+      if (!parsed) return;
+      const next = new Set(state.excluded);
+      let hit = 0;
+      for (const e of state.entries) {
+        if (e.excluded || !matchesDateRanges(e.date, parsed.ranges)) continue;
+        next.add(entryKey(e));
+        hit += 1;
+      }
+      if (!hit) return flash(`${rowTag(i)}这些日期没有对应的录像`);
+      setExcluded(next);
+      flash(`${rowTag(i)}已排除 ${hit} 条${invalidTail(parsed.invalid)}`);
+    }
+    function restoreLine(i) {
+      const parsed = parseLine(i);
+      if (!parsed) return;
+      const next = new Set(state.excluded);
+      let hit = 0;
+      let tagged = 0;
+      for (const e of state.entries) {
+        if (!matchesDateRanges(e.date, parsed.ranges)) continue;
+        if (next.delete(entryKey(e))) hit += 1;
+        else if (e.excluded) tagged += 1;
+      }
+      if (hit) {
+        setExcluded(next);
+        flash(`${rowTag(i)}已恢复 ${hit} 条${invalidTail(parsed.invalid)}`);
+      } else if (tagged) {
+        flash(`${rowTag(i)}这些条目由标签排除，停用或删除标签即可恢复`);
+      } else {
+        flash(`${rowTag(i)}这些日期没有已排除的条目`);
+      }
+    }
+    function toggleTagName(i) {
+      nameFor = nameFor === i ? null : i;
+      tagName = "";
+      render();
+      if (nameFor === null) return;
+      const input = ui.exclRows.children[i] && ui.exclRows.children[i].querySelector(".tag-name");
+      if (input && typeof input.focus === "function") input.focus();
+    }
+    function saveTagLine(i) {
+      const parsed = parseLine(i);
+      if (!parsed) return;
+      const name = nameFor === i && tagName.trim() || (exclLines[i] || "").trim();
+      const holidays = [...state.holidays, { name, ranges: parsed.ranges, enabled: true }];
+      nameFor = null;
+      tagName = "";
+      exclLines.splice(i, 1);
+      if (!exclLines.length) exclLines = [""];
+      setHolidays(holidays);
+      flash(`已添加「${name}」，对所有课程生效${invalidTail(parsed.invalid)}`);
+    }
+    function addLine() {
+      exclLines.push("");
+      render();
+      const item = ui.exclRows.children[exclLines.length - 1];
+      const input = item && item.querySelector(".excl-line");
+      if (input && typeof input.focus === "function") input.focus();
+    }
+    function delLine(i) {
+      if (i < 1 || exclLines.length < 2) return;
+      exclLines.splice(i, 1);
+      if (nameFor === i) nameFor = null;
+      else if (nameFor > i) nameFor -= 1;
+      render();
+    }
+    ui.exclRows.addEventListener("input", (ev) => {
+      const d = ev.target.dataset || {};
+      if (d.exclLine !== void 0) exclLines[Number(d.exclLine)] = ev.target.value;
+      else if (d.exclName !== void 0) tagName = ev.target.value;
+    });
+    ui.exclRows.addEventListener("click", (ev) => {
+      const d = ev.target.dataset || {};
+      if (d.exclAdd !== void 0) return addLine();
+      if (d.exclDel !== void 0) return delLine(Number(d.exclDel));
+      if (d.exclApply !== void 0) return applyLine(Number(d.exclApply));
+      if (d.exclRestore !== void 0) return restoreLine(Number(d.exclRestore));
+      if (d.exclTag !== void 0) return toggleTagName(Number(d.exclTag));
+      if (d.exclSave !== void 0) return saveTagLine(Number(d.exclSave));
+    });
+    ui.exclRows.addEventListener("keydown", (ev) => {
+      const d = ev.target.dataset || {};
+      if (d.exclLine !== void 0 && ev.key === "Enter") applyLine(Number(d.exclLine));
+      else if (d.exclName !== void 0 && ev.key === "Enter") saveTagLine(Number(d.exclName));
+      else if (ev.key === "Escape" && nameFor !== null) {
+        nameFor = null;
+        tagName = "";
+        render();
+      }
+    });
+    ui.holidays.addEventListener("change", (ev) => {
+      const i = Number(ev.target.dataset && ev.target.dataset.hol);
+      if (!Number.isInteger(i) || !state.holidays[i]) return;
+      const holidays = state.holidays.map((h, n) => n === i ? { ...h, enabled: !!ev.target.checked } : h);
+      setHolidays(holidays);
+      flash(ev.target.checked ? `已启用「${holidays[i].name}」` : `已停用「${holidays[i].name}」`);
+    });
+    ui.holidays.addEventListener("click", (ev) => {
+      const i = Number(ev.target.dataset && ev.target.dataset.holDel);
+      if (!Number.isInteger(i) || !state.holidays[i]) return;
+      const name = state.holidays[i].name;
+      setHolidays(state.holidays.filter((_, n) => n !== i));
+      flash(`已删除「${name}」`);
+    });
     ui.chkAll.addEventListener("change", () => {
-      state.selected = ui.chkAll.checked ? new Set(state.entries.map(entryKey)) : /* @__PURE__ */ new Set();
+      state.selected = ui.chkAll.checked ? new Set(selectableEntries().map(entryKey)) : /* @__PURE__ */ new Set();
       render();
     });
     $(".bar").addEventListener("click", (ev) => {
       const act = ev.target.dataset && ev.target.dataset.act;
       if (act === "scan") actions.scan();
-      else if (act === "all") state.selected = new Set(state.entries.map(entryKey)), render();
+      else if (act === "all") state.selected = new Set(selectableEntries().map(entryKey)), render();
       else if (act === "none") state.selected = /* @__PURE__ */ new Set(), render();
       else if (act === "open") actions.openEntries(selectedEntries());
       else if (act === "copy") {
         if (!state.entries.length) return flash("没有可复制的条目");
-        const list = state.selected.size ? selectedEntries() : state.entries;
+        const list = state.selected.size ? selectedEntries() : selectableEntries();
         copyText(
           buildListText({ course: state.course, template: state.template, entries: list }),
           `已复制 ${list.length} 条清单` + (state.selected.size ? "（仅选中）" : "")
@@ -2667,9 +2990,17 @@
       if (!key) return;
       const entry = state.entries.find((e) => entryKey(e) === key);
       if (ev.target.type === "checkbox") {
+        if (entry.excluded) return;
         if (ev.target.checked) state.selected.add(key);
         else state.selected.delete(key);
-        ui.chkAll.checked = state.selected.size === state.entries.length;
+        const selectable = selectableEntries().length;
+        ui.chkAll.checked = selectable > 0 && state.selected.size === selectable;
+      } else if (ev.target.dataset.row === "toggle-exclude") {
+        const next = new Set(state.excluded);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        setExcluded(next);
+        flash(entry.excluded ? "已恢复该条" : "已排除该条");
       } else if (ev.target.dataset.row === "open") {
         actions.openEntries([entry]);
       } else if (ev.target.dataset.row === "copy") {
@@ -2831,9 +3162,11 @@
   function listPage() {
     if (window.__courseFetchLoaded) return;
     window.__courseFetchLoaded = true;
-    const VERSION = typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version || "0.4.1";
+    const VERSION = typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version || "0.5.0";
     console.info(`[Course Fetch] v${VERSION} loaded`);
     const courseId = parseCourseId(location.href);
+    const savedExcluded = store.get(`excluded:${courseId}`, []);
+    const savedHolidays = store.get("holidays", []);
     const state = {
       course: store.get(`course:${courseId}`, "") || detectCourseName() || (courseId ? `course_${courseId}` : ""),
       template: store.get("template", DEFAULT_TEMPLATE),
@@ -2848,6 +3181,10 @@
       pages: 0,
       selected: /* @__PURE__ */ new Set(),
       // entryKey
+      // entryKey；本课程手动排除的条目（放假空回放等），按课程记住
+      excluded: new Set(Array.isArray(savedExcluded) ? savedExcluded : []),
+      // [{ name, ranges, enabled }]；全局节假日标签，跨课程自动生效
+      holidays: Array.isArray(savedHolidays) ? savedHolidays : [],
       scanning: false,
       status: "",
       download: null,
@@ -2857,7 +3194,8 @@
     };
     const requestLimiter = createRequestLimiter(BATCH_LIMITS.requests);
     const limitedRequest = requestLimiter.wrap(gmRequest);
-    const filenameOf = (e) => formatFilename(state.template, e, { course: state.course });
+    const numbered = (e) => e.excluded ? { ...e, index: e.origIndex } : e;
+    const filenameOf = (e) => formatFilename(state.template, numbered(e), { course: state.course });
     const outputNameOf = (e) => withExtension(filenameOf(e), state.format);
     async function scan() {
       if (state.scanning || state.download || state.batch?.running) return;
@@ -2873,7 +3211,10 @@
       const keys = new Set(result.entries.map(entryKey));
       state.selected = new Set([...state.selected].filter((k) => keys.has(k)));
       Object.assign(state, {
-        entries: result.entries,
+        entries: applyExclusions(
+          result.entries,
+          new Set(collectExclusions(result.entries, state.excluded, holidayRanges(state.holidays)).keys())
+        ),
         duplicates: result.duplicates,
         failures: result.failures,
         warnings: result.warnings,
@@ -2895,12 +3236,13 @@
       ui.flash(`已打开 ${ok.length} 个页面` + (missing ? `，${missing} 条无链接` : ""));
     }
     function exportManifest() {
-      if (!state.entries.length) return ui.flash("没有可导出的条目");
+      const entries = state.entries.filter((e) => !e.excluded);
+      if (!entries.length) return ui.flash("没有可导出的条目");
       const manifest = buildManifest({
         course: state.course,
         courseId,
         template: state.template,
-        entries: state.entries
+        entries
       });
       const blob = new Blob([safeStringify(manifest)], { type: "application/json" });
       saveBlob(blob, sanitizeFilename(`${state.course || courseId || "course"}-manifest.json`));

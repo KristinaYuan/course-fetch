@@ -10,6 +10,8 @@ const DATETIME_RE = /(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\
 const TIME_RE = new RegExp('时间\\s*[:：]\\s*' + DATETIME_RE.source);
 // 教师: 陈向群 操作: 观看
 const TEACHER_RE = /教师\s*[:：]\s*(.*?)\s*(?:操作\s*[:：]|观看|$)/;
+// 2026-10-01 或 2026-10-01~2026-10-07（区间符已由 parseDateRanges 归一化为 ~）
+const DATE_RANGE_RE = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:~(\d{4})[-/.](\d{1,2})[-/.](\d{1,2}))?$/;
 
 const pad2 = (n) => String(n).padStart(2, '0');
 const ymd = (y, m, d) => `${y}-${pad2(m)}-${pad2(d)}`;
@@ -102,6 +104,84 @@ export function dedupeAndSort(entries) {
   }
   const sorted = [...seen.values()].sort(compareEntries).map((e, i) => ({ ...e, index: i + 1 }));
   return { entries: sorted, duplicates };
+}
+
+const EMPTY_SET = new Set();
+
+/**
+ * 标记被排除的条目并重算序号：排除项 excluded=true、index=null（保留原序号在 origIndex），
+ * 其余从 1 连续编号。用于「放假等空回放不占号」。
+ */
+export function applyExclusions(entries, excludedKeys = EMPTY_SET) {
+  let n = 0;
+  return entries.map((e) => {
+    const excluded = excludedKeys.has(entryKey(e));
+    // origIndex 只在首次标注时记录：重复调用（排除集合变化）不能把它改成重排后的序号
+    return { ...e, excluded, origIndex: e.origIndex ?? e.index, index: excluded ? null : ++n };
+  });
+}
+
+/** 解析「2026-10-01, 2026-10-05~2026-10-07」这类输入。返回 { ranges, invalid }。 */
+export function parseDateRanges(text) {
+  const ranges = [];
+  const invalid = [];
+  // 先把区间符统一成 ~（含两侧空白），否则「2026-10-05 至 2026-10-07」会被空白拆成三个 token
+  const normalized = String(text == null ? '' : text).replace(/\s*(?:~|～|至|到|\.\.)\s*/g, '~');
+  for (const token of normalized.split(/[,，、;；\s]+/).filter(Boolean)) {
+    const m = DATE_RANGE_RE.exec(token);
+    if (!m) {
+      invalid.push(token);
+      continue;
+    }
+    const from = ymd(m[1], m[2], m[3]);
+    const to = m[4] ? ymd(m[4], m[5], m[6]) : from;
+    if (to < from) {
+      invalid.push(token);
+      continue;
+    }
+    ranges.push({ from, to });
+  }
+  return { ranges, invalid };
+}
+
+/** ISO 日期可字典序比较，直接判断是否落在该区间内（含端点）。 */
+export function inRange(date, range) {
+  return date >= range.from && date <= range.to;
+}
+
+/** 是否落在任一区间内（含端点）。 */
+export function matchesDateRanges(date, ranges) {
+  return ranges.some((r) => inRange(date, r));
+}
+
+/**
+ * 展开启用的节假日标签：holidays = [{ name, ranges, enabled }] → [{ from, to, name }]。
+ * 停用（enabled === false）的标签不展开。
+ */
+export function holidayRanges(holidays = []) {
+  const out = [];
+  for (const h of holidays) {
+    if (!h || h.enabled === false) continue;
+    for (const r of h.ranges || []) out.push({ from: r.from, to: r.to, name: h.name });
+  }
+  return out;
+}
+
+/**
+ * 计算排除项：手动排除 ∪ 命中节假日标签的条目。
+ * 返回 Map<entryKey, 标签名>（手动排除的标签名为 ''），键集就是排除集合。
+ */
+export function collectExclusions(entries, manualKeys = EMPTY_SET, ranges = []) {
+  const out = new Map();
+  for (const e of entries) {
+    const key = entryKey(e);
+    if (manualKeys.has(key)) out.set(key, '');
+    else if (ranges.length) {
+      const hit = ranges.find((r) => inRange(e.date, r));
+      if (hit) out.set(key, hit.name || '');
+    }
+  }
+  return out;
 }
 
 export function sanitizeFilename(name) {
