@@ -23,7 +23,7 @@
 // @connect      self
 // @run-at       document-idle
 // @license      MIT
-// @author       miniyuan
+// @author       miniyuan & Kristina
 // ==/UserScript==
 
 /*

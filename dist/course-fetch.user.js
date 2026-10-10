@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Course Fetch
 // @namespace    https://github.com/MiniYuanBot/course-fetch
-// @version      0.5.0
+// @version      0.5.1
 // @description  北大教学网课堂实录：枚举整门课程录像、排序、命名、导出 manifest，支持单条和批量下载，无损保存为 MP4。
 // @homepageURL  https://github.com/MiniYuanBot/course-fetch
 // @supportURL   https://github.com/MiniYuanBot/course-fetch/issues
@@ -23,7 +23,7 @@
 // @connect      self
 // @run-at       document-idle
 // @license      MIT
-// @author       miniyuan
+// @author       miniyuan & Kristina
 // ==/UserScript==
 
 /*
@@ -3166,7 +3166,7 @@
   function listPage() {
     if (window.__courseFetchLoaded) return;
     window.__courseFetchLoaded = true;
-    const VERSION = typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version || "0.5.0";
+    const VERSION = typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version || "0.5.1";
     console.info(`[Course Fetch] v${VERSION} loaded`);
     const courseId = parseCourseId(location.href);
     const savedExcluded = store.get(`excluded:${courseId}`, []);
