@@ -2439,8 +2439,8 @@
     <div class="bd">
       <label><span>课程</span><input type="text" class="course"></label>
       <label><span>命名模板</span><input type="text" class="tpl"><button class="reset-tpl">重置</button></label>
-      <div class="hint">变量：{index:02d} {date} {YYYY} {YY} {MM} {DD} {periodStart} {periodEnd} {teacher} {time} {startTime}</div>
-      <div class="hint">课程：{course} 完整名称 · {courseName} 课程名 · {academicYear} 学年（如 24-25）· {semester} 学期（如 1）</div>
+      <div class="hint">变量：{index:02d}, {date}, {YYYY}, {YY}, {MM}, {DD}, {periodStart}, {periodEnd}, {teacher}, {time}, {startTime}</div>
+      <div class="hint">课程：{course} 完整名称, {courseName} 课程名, {academicYear} 学年（如 24-25）, {semester} 学期（如 1）</div>
       <label><span>输出格式</span><select class="fmt"><option value="mp4">MP4（无损转封装，推荐）</option><option value="ts">TS（原始流）</option></select></label>
       <details class="excl-box">
         <summary class="excl-sum">排除日期</summary>
@@ -2755,7 +2755,7 @@
         });
         box2.dataset.hol = String(i);
         box2.title = "停用后不再自动排除";
-        const name = Object.assign(document.createElement("b"), { textContent: h.name });
+        const name = Object.assign(document.createElement("span"), { textContent: h.name });
         const dates = Object.assign(document.createElement("span"), {
           className: "dates",
           textContent: h.ranges.map((r) => r.from === r.to ? r.from : `${r.from}~${r.to}`).join(" ")
