@@ -179,6 +179,12 @@
     const s = String(name).replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").replace(/\s+/g, " ").trim().replace(/[. ]+$/, "");
     return s || "untitled";
   }
+  function parseCourseName(course) {
+    const text = normalizeText(course);
+    const m = /^(.*?)\s*[(（]\s*(\d{2}(?:\d{2})?)\s*[-－–—]\s*(\d{2}(?:\d{2})?)\s*学年\s*第\s*(\d+)\s*学期\s*[)）]$/.exec(text);
+    if (!m) return { courseName: text, academicYear: "", semester: "" };
+    return { courseName: m[1].trim(), academicYear: `${m[2]}-${m[3]}`, semester: m[4] };
+  }
   function formatFilename(template, entry, ctx = {}) {
     const date = entry.date || "";
     const vars = {
@@ -192,6 +198,7 @@
       periodEnd: entry.periodEnd,
       teacher: entry.teacher || "",
       course: ctx.course || "",
+      ...parseCourseName(ctx.course),
       startTime: entry.startTime || "",
       time: entry.startTime ? entry.startTime.slice(11, 16).replace(":", "") : ""
     };
@@ -2432,7 +2439,8 @@
     <div class="bd">
       <label><span>课程</span><input type="text" class="course"></label>
       <label><span>命名模板</span><input type="text" class="tpl"><button class="reset-tpl">重置</button></label>
-      <div class="hint">变量：{index:02d} {date} {YYYY} {YY} {MM} {DD} {periodStart} {periodEnd} {teacher} {course} {time} {startTime}</div>
+      <div class="hint">变量：{index:02d} {date} {YYYY} {YY} {MM} {DD} {periodStart} {periodEnd} {teacher} {time} {startTime}</div>
+      <div class="hint">课程：{course} 完整名称 · {courseName} 课程名 · {academicYear} 学年（如 24-25）· {semester} 学期（如 1）</div>
       <label><span>输出格式</span><select class="fmt"><option value="mp4">MP4（无损转封装，推荐）</option><option value="ts">TS（原始流）</option></select></label>
       <details class="excl-box">
         <summary class="excl-sum">排除日期</summary>

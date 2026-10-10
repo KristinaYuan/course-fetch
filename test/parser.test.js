@@ -158,6 +158,45 @@ test('holidayRanges / collectExclusions: 全局标签与手动排除合并，停
   assert.deepEqual(P.applyExclusions(entries, new Set(map.keys())).map((e) => e.index), [null, null, 1]);
 });
 
+test('parseCourseName: 拆分末尾学年学期，保留课程名内括号', () => {
+  for (const course of [
+    '计算概论（B）上机(24-25学年第1学期)',
+    '计算概论（B）上机（24-25学年第1学期）',
+    ' 计算概论（B）上机 （ 24 – 25 学年 第 1 学期 ） ',
+  ]) {
+    assert.deepEqual(P.parseCourseName(course), {
+      courseName: '计算概论（B）上机', academicYear: '24-25', semester: '1',
+    });
+  }
+  assert.deepEqual(P.parseCourseName('计算概论(B)上机(2024-2025学年第2学期)'), {
+    courseName: '计算概论(B)上机', academicYear: '2024-2025', semester: '2',
+  });
+});
+
+test('parseCourseName: 没有标准末尾后缀时保留完整课程名，不猜测学年学期', () => {
+  for (const course of ['操作系统', '计算概论（B）上机', '课程(实验班)',
+    '课程(24-25学年)', '课程(第1学期)', '课程(24-25学年第1学期)实验班',
+    '课程(2024年秋季)', '', null, undefined]) {
+    assert.deepEqual(P.parseCourseName(course), { courseName: course || '', academicYear: '', semester: '' });
+  }
+});
+
+test('formatFilename: 课程拆分变量可组合和补零，course 仍为完整名称', () => {
+  const course = '计算概论（B）上机(24-25学年第1学期)';
+  const e = { index: 3, date: '2024-09-30' };
+  assert.equal(P.formatFilename('{courseName}-{academicYear}-S{semester}-L{index:02d}.mp4', e, { course }),
+    '计算概论（B）上机-24-25-S1-L03.mp4');
+  assert.equal(P.formatFilename('{courseName}-第{semester:02d}学期.mp4', e, { course }),
+    '计算概论（B）上机-第01学期.mp4');
+  assert.equal(P.formatFilename('{course}.mp4', e, { course }), `${course}.mp4`);
+});
+
+test('formatFilename: 课程没有学期后缀时新变量仍可使用，缺失课程也不抛错', () => {
+  assert.equal(P.formatFilename('{courseName}{academicYear}{semester}.mp4', {}, { course: '计算概论（B）上机' }),
+    '计算概论（B）上机.mp4');
+  assert.equal(P.formatFilename('{courseName}{academicYear}{semester}.mp4', {}), '.mp4');
+});
+
 test('formatFilename: 默认模板', () => {
   const e = { index: 3, date: '2026-09-30', periodStart: 3, periodEnd: 4, startTime: '2026-09-30 10:10:00', teacher: '陈向群' };
   assert.equal(P.formatFilename(P.DEFAULT_TEMPLATE, e), 'L03-2026-09-30-第3-4节.mp4');
@@ -212,6 +251,18 @@ test('buildListText: 不包含 URL', () => {
   const entries = [{ index: 1, date: '2026-09-30', periodStart: 3, periodEnd: 4, startTime: '2026-09-30 10:10:00', teacher: '陈向群', watchUrl: 'https://x?token=SECRET' }];
   const text = P.buildListText({ course: '操作系统', template: P.DEFAULT_TEMPLATE, entries });
   assert.equal(text, '# 操作系统（1 条）\nL01-2026-09-30-第3-4节.mp4\t2026-09-30 10:10:00\t陈向群');
+});
+
+test('课程拆分模板：下载命名、复制清单和 manifest 使用相同文件名', () => {
+  const course = '计算概论（B）上机(24-25学年第1学期)';
+  const template = '{courseName}-{academicYear}-S{semester}-L{index:02d}.mp4';
+  const entry = { index: 1, date: '2024-09-30', periodStart: 3, periodEnd: 4, startTime: '', teacher: '王老师' };
+  const filename = P.formatFilename(template, entry, { course });
+  const manifest = P.buildManifest({ course, template, entries: [entry] });
+  assert.equal(manifest.course.name, course);
+  assert.equal(manifest.lectures[0].filename, filename);
+  assert.equal(P.buildListText({ course, template, entries: [entry] }),
+    `# ${course}（1 条）\n${filename}\t2024-09-30\t王老师`);
 });
 
 test('resolveUrl', () => {

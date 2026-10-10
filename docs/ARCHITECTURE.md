@@ -114,12 +114,16 @@ dist/course-fetch.user.js  # 构建产物：可直接安装的单文件 userscri
 | `{YYYY}` / `{YY}` / `{MM}` / `{DD}` | 日期拆分：年 / 年后两位 / 月 / 日 | `2026` / `26` / `09` / `30` |
 | `{periodStart}` / `{periodEnd}` | 起止节次 | `3` / `4` |
 | `{teacher}` | 教师 | `陈向群` |
-| `{course}` | 面板中的课程名 | `操作系统` |
+| `{course}` | 面板中的完整课程名 | `计算概论（B）上机(24-25学年第1学期)` |
+| `{courseName}` | 去掉末尾学年学期后的课程名 | `计算概论（B）上机` |
+| `{academicYear}` | 学年，保留年份位数 | `24-25` |
+| `{semester}` | 学期编号，支持 `:02d` 补零 | `1` |
 | `{time}` | 开始时间 HHmm | `1010` |
 | `{startTime}` | 完整开始时间（冒号替换成 `_`） | `2026-09-30 10_10_00` |
 
 - 文件名中的非法字符 `\ / : * ? " < > |` 替换为 `_`，未知变量原样保留。
 - 模板中的视频扩展名会按「输出格式」换成 `.mp4` 或 `.ts`。
+- `parseCourseName` 只识别末尾的 `(24-25学年第1学期)`，支持中英文括号、空白和四位年份；课程名内其它括号保留。未匹配时，`courseName` 为完整课程名，`academicYear` / `semester` 为空。下载、复制清单和 manifest 中的文件名统一通过 `formatFilename` 使用这些变量，manifest 的 `course.name` 保留完整名称。
 
 「排除」用于放假时空回放占号的情况：`applyExclusions(entries, excludedKeys)` 在 `dedupeAndSort` 的排序结果之上重算序号，被排除项 `index` 记为 `null`、原序号存进 `origIndex`（列表里灰显并保留原文件名，避免出现 `L00`），其余从 1 连续编号。被排除项不参与 `{index}` 编号、批量下载、`buildListText` 和 `buildManifest`。
 

@@ -193,9 +193,19 @@ export function sanitizeFilename(name) {
   return s || 'untitled';
 }
 
+/** 只拆分末尾的“(24-25学年第1学期)”，保留课程名中其它括号；兼容中文括号和四位年份。 */
+export function parseCourseName(course) {
+  const text = normalizeText(course);
+  const m = /^(.*?)\s*[(（]\s*(\d{2}(?:\d{2})?)\s*[-－–—]\s*(\d{2}(?:\d{2})?)\s*学年\s*第\s*(\d+)\s*学期\s*[)）]$/.exec(text);
+  if (!m) return { courseName: text, academicYear: '', semester: '' };
+  return { courseName: m[1].trim(), academicYear: `${m[2]}-${m[3]}`, semester: m[4] };
+}
+
 /**
  * 模板变量：{index} {date} {periodStart} {periodEnd} {teacher} {course} {time}(HHmm) {startTime}
  * 日期拆分：{YYYY} {YY} {MM} {DD}，如 2026-09-15 → 2026 / 26 / 09 / 15，便于拼成 260915、0915 等。
+ * 课程拆分：{courseName} {academicYear} {semester}，如 计算概论（B）上机(24-25学年第1学期)
+ * → 计算概论（B）上机 / 24-25 / 1；{course} 保留完整名称。
  * 数字补零：{index:02d}、{index:3d} 均按零填充到指定宽度。未知变量原样保留。
  */
 export function formatFilename(template, entry, ctx = {}) {
@@ -211,6 +221,7 @@ export function formatFilename(template, entry, ctx = {}) {
     periodEnd: entry.periodEnd,
     teacher: entry.teacher || '',
     course: ctx.course || '',
+    ...parseCourseName(ctx.course),
     startTime: entry.startTime || '',
     time: entry.startTime ? entry.startTime.slice(11, 16).replace(':', '') : '',
   };
