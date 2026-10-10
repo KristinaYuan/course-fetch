@@ -82,7 +82,7 @@ export async function runBatch(batch, {
       task.status = 'running';
       task.phase = 'file';
       onChange();
-      if (!task.watchUrl) throw new Error('该条目没有可用的观看链接');
+      if (!task.watchUrl) throw new Error('该条目没有可用的播放链接');
       // 文件句柄创建不能 abortable：必须取得最终结果后才能可靠关闭迟到的句柄。
       sink = await openSink(task.filename, signal);
       if (signal.aborted) throw abortError();

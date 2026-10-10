@@ -30,7 +30,7 @@
  * 功能：课程录像枚举、metadata 解析、排序、命名、工作流辅助；单条和批量录像下载（标准 HLS AES-128）。
  * 下载只使用当前浏览器登录会话本来就能访问的 m3u8 / key / 分片：遇到 401/403 直接失败，
  * 不做任何登录或权限绕过；不支持 SAMPLE-AES、非 identity KEYFORMAT 等 DRM 方案。
- * “观看”链接和 AES key 只保存在内存中，不写入 storage / manifest / 剪贴板清单。
+ * 播放链接（“观看”/“预览”）和 AES key 只保存在内存中，不写入 storage / manifest / 剪贴板清单。
  * m3u8 地址由临时打开的播放页自动捕获，经 GM storage 短暂传回列表页，读取后立即删除。
  * 播放页 / 播放器 iframe 上只在下载时存在未过期的 capture 请求时才运行捕获，平时什么都不做。
  *

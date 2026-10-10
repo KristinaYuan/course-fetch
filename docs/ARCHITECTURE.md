@@ -60,7 +60,7 @@ dist/course-fetch.user.js  # 构建产物：可直接安装的单文件 userscri
 - 只请求当前登录会话本来就能访问的资源；401/403 直接失败，不重试、不绕过。
 - 只支持 `METHOD=AES-128` 且 `KEYFORMAT=identity`；SAMPLE-AES、FairPlay、Widevine 等方案直接报「不支持」。
 - AES key 只在下载过程中保存在内存中，从不写入 storage 或日志。
-- 「观看」链接可能带临时 token，只保存在页面内存中，不写入 storage、manifest 或复制出的清单。
+- 播放链接（「观看」/「预览」）可能带临时 token，只保存在页面内存中，不写入 storage、manifest 或复制出的清单。
 - 捕获到的 m3u8 地址经 GM storage 从播放页短暂传回列表页，读取后立即删除。
 
 ## 下载与并发
@@ -181,7 +181,7 @@ npm run ts2mp4 -- in.ts [out.mp4]   # 离线转封装
 ## 技术限制
 
 - 教学网加载了 Prototype.js，它会覆盖 `Array.from` 等全局方法。处理 DOM 集合时只用普通循环，不要使用 `Array.from(list, mapFn)`。
-- 分页优先识别「下一页」按钮（含图片按钮），兼容旧版文字「前进」；忽略跳页表单里的「前进」，末页没有下一页时停止。翻页链接如果是 `javascript:` 跳转并且提取不出 URL，就无法自动翻页。
+- 列表同时识别学生的「观看」和助教/教师的「预览」链接；分页只沿「下一页」按钮（含图片按钮）读取，末页没有下一页时停止。翻页链接如果是 `javascript:` 跳转并且提取不出 URL，就无法自动翻页。
 - 分页通过同源 `fetch` 获取，依赖当前登录状态。
 - 课程名按 Blackboard 常见元素启发式识别。
 - 暂不支持 `EXT-X-BYTERANGE`、`EXT-X-MAP`（fMP4）和直播（没有 `EXT-X-ENDLIST` 时只下载当时列表中的分片）。

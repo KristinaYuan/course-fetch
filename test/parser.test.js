@@ -40,6 +40,13 @@ test('parseRowText: 多位教师', () => {
   assert.equal(r.entry.teacher, '张三,李四');
 });
 
+test('parseRowText: 预览按钮不混入教师姓名，兼容省略操作标签', () => {
+  for (const action of ['操作: 预览', '预览']) {
+    const r = P.parseRowText(`2026-09-30第3-4节 时间: 2026-09-30 10:10:00 教师: 陈向群 ${action}`);
+    assert.deepEqual(r, P.parseRowText(ROW));
+  }
+});
+
 test('parseRowText: 无法解析时返回错误', () => {
   const r = P.parseRowText('暂无录像 观看');
   assert.equal(r.ok, false);
@@ -227,16 +234,17 @@ function fakeRow(cellTexts) {
   return { cells: cellTexts.map((t) => ({ textContent: t })) };
 }
 
-test('extractPage: 收集观看行与前进链接', () => {
+test('extractPage: 收集观看/预览行与下一页链接', () => {
   const base = 'https://course.pku.edu.cn/webapps/v/videoList.action?course_id=1';
   const r1 = fakeRow(['2026-09-30第3-4节', '时间: 2026-09-30 10:10:00', '教师: 陈向群', '操作: 观看']);
-  const r2 = fakeRow(['2026-09-23第3-4节', '时间: 2026-09-23 10:10:00', '教师: 陈向群', '操作: 观看']);
+  const r2 = fakeRow(['2026-09-23第3-4节', '时间: 2026-09-23 10:10:00', '教师: 陈向群', '操作: 预览']);
   const doc = {
     querySelectorAll: () => [
       fakeAnchor(' 观看 ', { href: 'play.action?id=1&token=a' }, r1),
-      fakeAnchor('观看', { href: '#', onclick: "openVideo('play.action?id=2&token=b')" }, r2),
+      fakeAnchor(' 预览 ', { href: '#', onclick: "openVideo('play.action?id=2&token=b')" }, r2),
       fakeAnchor('观看', { href: 'x' }, null), // 不在行内
-      fakeAnchor('前进', { href: 'videoList.action?course_id=1&page=2' }, null),
+      fakeAnchor('预览', { href: 'x' }, null),
+      fakeAnchor('下一页', { href: 'videoList.action?course_id=1&page=2' }, null),
       fakeAnchor('其它', { href: 'y' }, null),
     ],
   };
@@ -245,12 +253,12 @@ test('extractPage: 收集观看行与前进链接', () => {
   assert.equal(page.rows[0].text, '2026-09-30第3-4节 时间: 2026-09-30 10:10:00 教师: 陈向群 操作: 观看');
   assert.equal(page.rows[0].watchUrl, 'https://course.pku.edu.cn/webapps/v/play.action?id=1&token=a');
   assert.equal(page.rows[1].watchUrl, 'https://course.pku.edu.cn/webapps/v/play.action?id=2&token=b');
-  assert.equal(page.issues.length, 1);
+  assert.deepEqual(page.issues, ['有一个“观看”链接不在表格行内，已跳过', '有一个“预览”链接不在表格行内，已跳过']);
   assert.equal(page.next.url, 'https://course.pku.edu.cn/webapps/v/videoList.action?course_id=1&page=2');
 });
 
-test('extractPage: 最后一页（前进无 href / 无前进）', () => {
-  const noHref = { querySelectorAll: () => [fakeAnchor('前进', {}, null)] };
+test('extractPage: 下一页没有 href / 没有下一页按钮', () => {
+  const noHref = { querySelectorAll: () => [fakeAnchor('下一页', {}, null)] };
   const p1 = P.extractPage(noHref, 'https://a.pku.edu.cn/');
   assert.equal(p1.next.url, null);
   assert.equal(p1.next.hasHref, false);
@@ -260,7 +268,7 @@ test('extractPage: 最后一页（前进无 href / 无前进）', () => {
 
 // ---- 教学网真实 DOM 结构（v0.1.1 回归） -----------------------------------------
 
-function realRow(i, title, time, teacher, href) {
+function realRow(i, title, time, teacher, href, action = '观看', actionsBefore = []) {
   const cell = (label, ...value) =>
     h('td', { class: '', valign: 'top' },
       '\n        ', h('span', { class: 'mobile-table-label' }, label), '\n        ',
@@ -270,7 +278,8 @@ function realRow(i, title, time, teacher, href) {
     cell('时间: ', `\n            ${time}\n        `),
     cell('教师: ', `\n            ${teacher}\n        `),
     cell('操作: ', '\n            ',
-      h('a', { class: 'inlineAction', target: '_blank', href }, '\n                观看\n            '),
+      ...actionsBefore,
+      h('a', { class: 'inlineAction', target: '_blank', href }, '\n                ', action, '\n            '),
       '\n        '),
   );
 }
@@ -279,7 +288,7 @@ function realPage() {
   return mkDoc(h('table', {}, h('tbody', {},
     realRow(0, '2026-09-30第3-4节', '2026-09-30 10:10:00', '陈向群', 'playVideo.action?token=AAA'),
     realRow(1, '2026-09-23第3-4节', '2026-09-23 10:10:00', '陈向群', 'playVideo.action?token=BBB'),
-  )), h('a', { href: 'videoList.action?course_id=_1_1&page=2' }, '前进'));
+  )), h('a', { href: 'videoList.action?course_id=_1_1&page=2' }, '下一页'));
 }
 
 const BASE = 'https://course.pku.edu.cn/webapps/bb-streammedia-hqy-BBLEARN/videoList.action?course_id=_1_1';
@@ -290,6 +299,18 @@ test('真实 DOM：分列提取 th / table-data-cell-value / 观看链接', () =
   assert.deepEqual(page.rows[0].cols, { title: '2026-09-30第3-4节', startTime: '2026-09-30 10:10:00', teacher: '陈向群' });
   assert.equal(page.rows[0].watchUrl, 'https://course.pku.edu.cn/webapps/bb-streammedia-hqy-BBLEARN/playVideo.action?token=AAA');
   assert.ok(page.next.url.endsWith('videoList.action?course_id=_1_1&page=2'));
+});
+
+test('真实 DOM：助教/教师预览链接前有管理操作时，使用预览地址而非首个链接', () => {
+  const tr = realRow(0, '2026-09-30第3-4节', '2026-09-30 10:10:00', '陈向群',
+    'playVideo.action?token=PREVIEW', h('span', {}, ' 预览 '), [h('a', { href: 'edit.action?id=1' }, '编辑')]);
+  const page = P.extractPage(mkDoc(h('table', {}, tr)), BASE);
+  assert.equal(page.rows.length, 1);
+  assert.equal(page.rows[0].watchUrl, new URL('playVideo.action?token=PREVIEW', BASE).href);
+  assert.deepEqual(P.parseRows(page.rows).entries[0], {
+    date: '2026-09-30', periodStart: 3, periodEnd: 4, startTime: '2026-09-30 10:10:00',
+    teacher: '陈向群', watchUrl: new URL('playVideo.action?token=PREVIEW', BASE).href, page: undefined,
+  });
 });
 
 test('真实 DOM：完整解析 → 排序 → 文件名', () => {
@@ -338,24 +359,26 @@ test('parseStructuredRow：日期/节次只从名称解析', () => {
   assert.equal(noTime.entry.startTime, null);
 });
 
-test('非标准结构的行回退到通用文本解析', () => {
-  const tr = h('tr', {}, h('td', {}, '2026-10-07第1-2节'), h('td', {}, '时间: 2026-10-07 08:00:00'), h('td', {}, '教师: 张三'), h('td', {}, h('a', { href: 'p.action?id=9' }, '观看')));
-  const page = P.extractPage(mkDoc(h('table', {}, tr)), BASE);
-  assert.equal(page.rows[0].cols, undefined);
-  const { entries } = P.parseRows(page.rows);
-  assert.deepEqual(
-    [entries[0].date, entries[0].periodStart, entries[0].startTime, entries[0].teacher],
-    ['2026-10-07', 1, '2026-10-07 08:00:00', '张三'],
-  );
+test('非标准结构的观看/预览行回退到通用文本解析', () => {
+  for (const action of ['观看', '预览']) {
+    const tr = h('tr', {}, h('td', {}, '2026-10-07第1-2节'), h('td', {}, '时间: 2026-10-07 08:00:00'), h('td', {}, '教师: 张三'), h('td', {}, h('a', { href: 'p.action?id=9' }, action)));
+    const page = P.extractPage(mkDoc(h('table', {}, tr)), BASE);
+    assert.equal(page.rows[0].cols, undefined);
+    const { entries } = P.parseRows(page.rows);
+    assert.deepEqual(
+      [entries[0].date, entries[0].periodStart, entries[0].startTime, entries[0].teacher],
+      ['2026-10-07', 1, '2026-10-07 08:00:00', '张三'],
+    );
+  }
 });
 
 // ---- crawlCourse 分页（v0.1.2） ------------------------------------------------
-function lectureRows(dates) {
-  return dates.map((d, i) => realRow(i, `${d}第3-4节`, `${d} 10:10:00`, '陈向群', `playVideo.action?token=${d}`));
+function lectureRows(dates, action = '观看') {
+  return dates.map((d, i) => realRow(i, `${d}第3-4节`, `${d} 10:10:00`, '陈向群', `playVideo.action?token=${d}`, action));
 }
 function listPage(dates, nextHref) {
   const kids = [h('table', {}, h('tbody', {}, ...lectureRows(dates)))];
-  if (nextHref !== undefined) kids.push(h('a', nextHref === null ? {} : { href: nextHref }, '前进'));
+  if (nextHref !== undefined) kids.push(h('a', nextHref === null ? {} : { href: nextHref }, '下一页'));
   return mkDoc(...kids);
 }
 const EIGHT = ['2026-09-09', '2026-09-11', '2026-09-16', '2026-09-18', '2026-09-23', '2026-09-25', '2026-09-30', '2026-10-02'];
@@ -371,30 +394,17 @@ function fakeFetch(pages) {
   return { fn, calls };
 }
 
-test('crawlCourse：只有一页，末页“前进”返回相同 8 条 → 共 1 页，8 条录像，无警告', async () => {
-  const next = url('&page=2');
-  const f = fakeFetch({ [next]: listPage(EIGHT.slice().reverse(), next) });
-  const r = await P.crawlCourse({ firstDoc: listPage(EIGHT.slice().reverse(), next), firstUrl: BASE, fetchDoc: f.fn });
-  assert.equal(r.status, '共 1 页，8 条录像');
-  assert.equal(r.pages, 1);
-  assert.equal(r.entries.length, 8);
-  assert.equal(r.duplicates.length, 0);
-  assert.deepEqual(r.warnings, []);
-  assert.equal(f.calls.length, 1);
-  assert.equal(r.entries[0].date, '2026-09-09');
-});
-
-test('crawlCourse：两页，第 2 页的“前进”返回同一页 → 共 2 页', async () => {
+test('crawlCourse：两页，末页没有下一页按钮 → 共 2 页', async () => {
   const p2 = url('&page=2');
-  const p3 = url('&page=3');
-  const f = fakeFetch({ [p2]: listPage(EIGHT.slice(0, 4), p3), [p3]: listPage(EIGHT.slice(0, 4), p3) });
+  const f = fakeFetch({ [p2]: listPage(EIGHT.slice(0, 4)) });
   const r = await P.crawlCourse({ firstDoc: listPage(EIGHT.slice(4), p2), firstUrl: BASE, fetchDoc: f.fn });
   assert.equal(r.status, '共 2 页，8 条录像');
   assert.deepEqual(r.warnings, []);
   assert.deepEqual(r.entries.map((e) => e.index), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(f.calls, [p2]);
 });
 
-test('crawlCourse：最后一页的“前进”没有 href → 正常结束，不请求', async () => {
+test('crawlCourse：下一页没有 href → 正常结束，不请求', async () => {
   const f = fakeFetch({});
   const r = await P.crawlCourse({ firstDoc: listPage(EIGHT, null), firstUrl: BASE, fetchDoc: f.fn });
   assert.equal(r.status, '共 1 页，8 条录像');
@@ -404,7 +414,7 @@ test('crawlCourse：最后一页的“前进”没有 href → 正常结束，�
 
 test('crawlCourse：真正的 URL 循环仍被 visited 拦截', async () => {
   const p2 = url('&page=2');
-  // 第 2 页有新录像，但“前进”指回第 1 页
+  // 第 2 页有新录像，但“下一页”指回第 1 页
   const f = fakeFetch({ [p2]: listPage(EIGHT.slice(0, 4), BASE) });
   const r = await P.crawlCourse({ firstDoc: listPage(EIGHT.slice(4), p2), firstUrl: BASE, fetchDoc: f.fn });
   assert.equal(r.pages, 2);
@@ -448,13 +458,13 @@ function blackboardPager(offset, totalPages, position = 'bot') {
       h('a', { class: 'gotolink', id: `listContainer_gobut_${position}`, href: PAGING_PATH }, '前进')));
 }
 
-function blackboardPage(dates, offset, totalPages) {
+function blackboardPage(dates, offset, totalPages, action = '观看') {
   return mkDoc(blackboardPager(offset, totalPages, 'top'),
-    h('table', {}, h('tbody', {}, ...lectureRows(dates))),
+    h('table', {}, h('tbody', {}, ...lectureRows(dates, action))),
     blackboardPager(offset, totalPages));
 }
 
-test('extractPage：图片下一页优先于文字前进，保留 startIndex 和所有查询参数', () => {
+test('extractPage：只识别下一页，保留 startIndex 和所有查询参数', () => {
   const doc = mkDoc(h('a', { href: PAGING_PATH }, '前进'), blackboardPager(0, 3));
   assert.equal(P.extractPage(doc, pagingUrl(0)).next.url, pagingUrl(25));
 });
@@ -474,9 +484,9 @@ test('extractPage：分别按 id、title、aria-label、rel、图片 alt 和文�
   }
 });
 
-test('extractPage：末页忽略隐藏跳页表单的前进和上一页/第一页', () => {
+test('extractPage：末页忽略跳页表单、前进文字和上一页/第一页', () => {
   assert.equal(P.extractPage(blackboardPage(EIGHT, 25, 2), pagingUrl(25)).next, null);
-  for (const attrs of [{ id: 'listContainer_gobut_top' }, { class: 'gotolink' }]) {
+  for (const attrs of [{}, { id: 'listContainer_gobut_top' }, { class: 'gotolink' }]) {
     const doc = mkDoc(h('a', { ...attrs, href: PAGING_PATH }, '前进'));
     assert.equal(P.extractPage(doc, pagingUrl(25)).next, null);
   }
@@ -517,6 +527,43 @@ test('crawlCourse：Blackboard 三页依次读取而不跳到末页，跨页重�
   assert.deepEqual(r.entries.map((e) => e.date), EIGHT);
   assert.deepEqual(r.warnings, ['发现 1 条重复录像，已合并']);
   assert.deepEqual(f.calls, [pagingUrl(25), pagingUrl(50)]);
+});
+
+test('crawlCourse：中间页全部重复仍沿下一页继续读取', async () => {
+  const f = fakeFetch({
+    [pagingUrl(25)]: blackboardPage(EIGHT.slice(4), 25, 3),
+    [pagingUrl(50)]: blackboardPage(EIGHT.slice(0, 4), 50, 3),
+  });
+  const r = await P.crawlCourse({
+    firstDoc: blackboardPage(EIGHT.slice(4), 0, 3), firstUrl: pagingUrl(0), fetchDoc: f.fn,
+  });
+  assert.equal(r.status, '共 3 页，8 条录像');
+  assert.deepEqual(r.entries.map((e) => e.date), EIGHT);
+  assert.deepEqual(r.warnings, ['发现 4 条重复录像，已合并']);
+  assert.deepEqual(f.calls, [pagingUrl(25), pagingUrl(50)]);
+});
+
+test('crawlCourse：助教/教师的全部预览条目跨页收集、排序并保留播放链接', async () => {
+  const f = fakeFetch({ [pagingUrl(25)]: blackboardPage(EIGHT.slice(0, 4), 25, 2, '预览') });
+  const r = await P.crawlCourse({
+    firstDoc: blackboardPage(EIGHT.slice(4), 0, 2, '预览'), firstUrl: pagingUrl(0), fetchDoc: f.fn,
+  });
+  assert.equal(r.status, '共 2 页，8 条录像');
+  assert.deepEqual(r.entries.map((e) => [e.index, e.date, e.watchUrl]),
+    EIGHT.map((date, i) => [i + 1, date, new URL(`playVideo.action?token=${date}`, BASE).href]));
+  assert.deepEqual(r.failures, []);
+  assert.deepEqual(r.warnings, []);
+  assert.deepEqual(f.calls, [pagingUrl(25)]);
+});
+
+test('crawlCourse：没有录像时提示同时检查观看和预览', async () => {
+  const f = fakeFetch({ [pagingUrl(25)]: blackboardPage([], 25, 2) });
+  const r = await P.crawlCourse({ firstDoc: blackboardPage([], 0, 2), firstUrl: pagingUrl(0), fetchDoc: f.fn });
+  assert.equal(r.entries.length, 0);
+  assert.deepEqual(r.warnings, [
+    '第 2 页没有找到“观看”或“预览”条目（登录可能已过期）',
+    '当前页面没有找到文本为“观看”或“预览”的链接',
+  ]);
 });
 
 test('crawlCourse：Blackboard 单页不请求隐藏的前进', async () => {

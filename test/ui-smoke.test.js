@@ -19,7 +19,7 @@ test('打包脚本 UI 冒烟：默认 MP4、单条/批量都选目录直接写�
     h('th', { scope: 'row' }, `2026-09-${20 + i}第3-4节`),
     h('td', {}, h('span', { class: 'table-data-cell-value' }, `2026-09-${20 + i} 10:10:00`)),
     h('td', {}, h('span', { class: 'table-data-cell-value' }, '王老师')),
-    h('td', {}, h('span', { class: 'table-data-cell-value' }, h('a', { href: `playVideo.action?token=${i}` }, '观看'))));
+    h('td', {}, h('span', { class: 'table-data-cell-value' }, h('a', { href: `playVideo.action?token=${i}` }, i === 0 ? '预览' : '观看'))));
   const document = uiDocument([h('table', {}, row(0), row(1), row(2))]);
   const values = new Map(), listeners = new Map(), tabs = [], files = new Map();
   const timers = new Set();

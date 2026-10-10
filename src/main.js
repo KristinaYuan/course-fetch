@@ -143,7 +143,7 @@ function listPage() {
 
   async function downloadEntry(entry) {
     if (state.download || state.batch?.running) return ui.flash('已有下载在进行中');
-    if (!entry.watchUrl) return ui.flash('该条目没有可用的观看链接');
+    if (!entry.watchUrl) return ui.flash('该条目没有可用的播放链接');
     const controller = new AbortController();
     const signal = controller.signal;
     const dl = {

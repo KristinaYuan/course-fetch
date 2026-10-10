@@ -30,7 +30,7 @@
  * 功能：课程录像枚举、metadata 解析、排序、命名、工作流辅助；单条和批量录像下载（标准 HLS AES-128）。
  * 下载只使用当前浏览器登录会话本来就能访问的 m3u8 / key / 分片：遇到 401/403 直接失败，
  * 不做任何登录或权限绕过；不支持 SAMPLE-AES、非 identity KEYFORMAT 等 DRM 方案。
- * “观看”链接和 AES key 只保存在内存中，不写入 storage / manifest / 剪贴板清单。
+ * 播放链接（“观看”/“预览”）和 AES key 只保存在内存中，不写入 storage / manifest / 剪贴板清单。
  * m3u8 地址由临时打开的播放页自动捕获，经 GM storage 短暂传回列表页，读取后立即删除。
  * 播放页 / 播放器 iframe 上只在下载时存在未过期的 capture 请求时才运行捕获，平时什么都不做。
  *
@@ -42,7 +42,7 @@
   var DATE_PERIOD_RE = /(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?\s*第\s*(\d{1,2})\s*(?:[-－–—~～至到]\s*(\d{1,2}))?\s*节/;
   var DATETIME_RE = /(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/;
   var TIME_RE = new RegExp("时间\\s*[:：]\\s*" + DATETIME_RE.source);
-  var TEACHER_RE = /教师\s*[:：]\s*(.*?)\s*(?:操作\s*[:：]|观看|$)/;
+  var TEACHER_RE = /教师\s*[:：]\s*(.*?)\s*(?:操作\s*[:：]|观看|预览|$)/;
   var DATE_RANGE_RE = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:~(\d{4})[-/.](\d{1,2})[-/.](\d{1,2}))?$/;
   var pad2 = (n) => String(n).padStart(2, "0");
   var ymd = (y, m, d) => `${y}-${pad2(m)}-${pad2(d)}`;
@@ -1009,69 +1009,53 @@
     const values = toList(tr.querySelectorAll("td .table-data-cell-value"));
     if (!th || values.length < 2) return null;
     return {
-      cols: { title: textOf(th), startTime: textOf(values[0]), teacher: textOf(values[1]) },
-      link: values[2] ? values[2].querySelector("a") : null
+      title: textOf(th),
+      startTime: textOf(values[0]),
+      teacher: textOf(values[1])
     };
   }
-  function nextPagePriority(a, label) {
+  function isNextPage(a, label) {
     const id = a.getAttribute("id") || "";
-    const classes = (a.getAttribute("class") || "").split(/\s+/);
-    if (/(?:^|_)gobut(?:_|$)/i.test(id) || classes.includes("gotolink")) return 0;
-    if (a.getAttribute("aria-disabled") === "true") return 0;
-    if (/(?:^|_)nextpage(?:_|$)/i.test(id)) return 2;
-    if ((a.getAttribute("rel") || "").toLowerCase().split(/\s+/).includes("next")) return 2;
+    if (a.getAttribute("aria-disabled") === "true") return false;
+    if (/(?:^|_)nextpage(?:_|$)/i.test(id)) return true;
+    if ((a.getAttribute("rel") || "").toLowerCase().split(/\s+/).includes("next")) return true;
     const labels = [label, a.getAttribute("title"), a.getAttribute("aria-label")];
     if (typeof a.querySelectorAll === "function") {
       for (const img of toList(a.querySelectorAll("img"))) labels.push(img.getAttribute("alt"));
     }
-    if (labels.some((s) => /^(下一页|next(?:\s+page)?)$/i.test(normalizeText(s)))) return 2;
-    return label === "前进" ? 1 : 0;
+    return labels.some((s) => /^(下一页|next(?:\s+page)?)$/i.test(normalizeText(s)));
   }
   function extractPage(doc, baseUrl) {
     const rows = [];
     const issues = [];
     let next = null;
-    let nextPriority = 0;
     for (const a of toList(doc.querySelectorAll("a"))) {
       const label = textOf(a);
-      if (label === "观看") {
+      if (label === "观看" || label === "预览") {
         const tr = a.closest ? a.closest("tr") : null;
         if (!tr) {
-          issues.push("有一个“观看”链接不在表格行内，已跳过");
+          issues.push(`有一个“${label}”链接不在表格行内，已跳过`);
           continue;
         }
-        const s = extractCols(tr);
-        if (s) rows.push({ cols: s.cols, watchUrl: linkTarget(s.link || a, baseUrl) });
+        const cols = extractCols(tr);
+        if (cols) rows.push({ cols, watchUrl: linkTarget(a, baseUrl) });
         else rows.push({ text: rowText(tr), watchUrl: linkTarget(a, baseUrl) });
-      } else {
-        const priority = nextPagePriority(a, label);
-        if (priority > 0 && priority >= nextPriority) {
-          const candidate = { url: linkTarget(a, baseUrl), hasHref: a.getAttribute("href") != null };
-          if (priority > nextPriority || !next.url) {
-            next = candidate;
-            nextPriority = priority;
-          }
-        }
+      } else if ((!next || !next.url) && isNextPage(a, label)) {
+        next = { url: linkTarget(a, baseUrl), hasHref: a.getAttribute("href") != null };
       }
     }
     return { rows, next, issues };
-  }
-  function rowKey(row) {
-    const r = row.cols ? parseStructuredRow(row.cols) : parseRowText(row.text);
-    return r.ok ? entryKey(r.entry) : `raw:${r.text}`;
   }
   async function crawlCourse({ firstDoc, firstUrl, fetchDoc, maxPages = 50, onProgress = () => {
   } }) {
     const stripHash = (u) => String(u).split("#")[0];
     const warnings = [];
     const rows = [];
-    const seen = /* @__PURE__ */ new Set();
     const visited = /* @__PURE__ */ new Set([stripHash(firstUrl)]);
     let pageNo = 1;
     const addPage = (pg, n) => {
       for (const r of pg.rows) {
         rows.push({ ...r, page: n });
-        seen.add(rowKey(r));
       }
       pg.issues.forEach((msg) => warnings.push(`第 ${n} 页：${msg}`));
     };
@@ -1102,18 +1086,16 @@
         warnings.push(`读取第 ${pageNo + 1} 页失败（${e.message}），已保留前 ${pageNo} 页的结果`);
         break;
       }
-      const next = extractPage(doc, url);
-      if (next.rows.length && next.rows.every((r) => seen.has(rowKey(r)))) break;
       pageNo += 1;
-      page = next;
-      if (!page.rows.length) warnings.push(`第 ${pageNo} 页没有找到“观看”条目（登录可能已过期）`);
+      page = extractPage(doc, url);
+      if (!page.rows.length) warnings.push(`第 ${pageNo} 页没有找到“观看”或“预览”条目（登录可能已过期）`);
       addPage(page, pageNo);
     }
     const { entries, failures } = parseRows(rows);
     const { entries: sorted, duplicates } = dedupeAndSort(entries);
     failures.forEach((f) => warnings.push(`第 ${f.page} 页：${f.error}：“${f.text.slice(0, 60)}”`));
     if (duplicates.length) warnings.push(`发现 ${duplicates.length} 条重复录像，已合并`);
-    if (!rows.length) warnings.push("当前页面没有找到文本为“观看”的链接");
+    if (!rows.length) warnings.push("当前页面没有找到文本为“观看”或“预览”的链接");
     const status = `共 ${pageNo} 页，${sorted.length} 条录像` + (failures.length ? `，${failures.length} 行解析失败` : "");
     return { entries: sorted, duplicates, failures, warnings, pages: pageNo, status };
   }
@@ -2296,7 +2278,7 @@
         task.status = "running";
         task.phase = "file";
         onChange();
-        if (!task.watchUrl) throw new Error("该条目没有可用的观看链接");
+        if (!task.watchUrl) throw new Error("该条目没有可用的播放链接");
         sink = await openSink(task.filename, signal);
         if (signal.aborted) throw abortError();
         checkSink(sink);
@@ -3279,7 +3261,7 @@
     }
     async function downloadEntry(entry) {
       if (state.download || state.batch?.running) return ui.flash("已有下载在进行中");
-      if (!entry.watchUrl) return ui.flash("该条目没有可用的观看链接");
+      if (!entry.watchUrl) return ui.flash("该条目没有可用的播放链接");
       const controller = new AbortController();
       const signal = controller.signal;
       const dl = {

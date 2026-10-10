@@ -1,6 +1,6 @@
 // 教学网页面：课堂实录 DOM 提取、分页、课程名识别、定位播放列表。
 
-import { normalizeText, parseStructuredRow, parseRowText, parseRows, entryKey, dedupeAndSort } from './parser.js';
+import { normalizeText, parseRows, dedupeAndSort } from './parser.js';
 import { abortError } from './downloader.js';
 import { capturePlaylist } from './capture.js';
 
@@ -49,7 +49,7 @@ function rowText(tr) {
  *   th[scope="row"]                → 名称（日期/节次）
  *   td .table-data-cell-value [0]  → 开始时间
  *   td .table-data-cell-value [1]  → 教师
- *   td .table-data-cell-value [2]  → 观看链接
+ * 播放链接由调用方按“观看”或“预览”识别。
  * 结构不符时返回 null，由调用方走通用 fallback。
  */
 function extractCols(tr) {
@@ -58,84 +58,64 @@ function extractCols(tr) {
   const values = toList(tr.querySelectorAll('td .table-data-cell-value'));
   if (!th || values.length < 2) return null;
   return {
-    cols: { title: textOf(th), startTime: textOf(values[0]), teacher: textOf(values[1]) },
-    link: values[2] ? values[2].querySelector('a') : null,
+    title: textOf(th), startTime: textOf(values[0]), teacher: textOf(values[1]),
   };
 }
 
-/** Blackboard 的“前进”是跳页表单的提交按钮，不能当成“下一页”。 */
-function nextPagePriority(a, label) {
+/** 仅识别下一页按钮，支持图片和文字形式。 */
+function isNextPage(a, label) {
   const id = a.getAttribute('id') || '';
-  const classes = (a.getAttribute('class') || '').split(/\s+/);
-  if (/(?:^|_)gobut(?:_|$)/i.test(id) || classes.includes('gotolink')) return 0;
-  if (a.getAttribute('aria-disabled') === 'true') return 0;
+  if (a.getAttribute('aria-disabled') === 'true') return false;
 
-  if (/(?:^|_)nextpage(?:_|$)/i.test(id)) return 2;
-  if ((a.getAttribute('rel') || '').toLowerCase().split(/\s+/).includes('next')) return 2;
+  if (/(?:^|_)nextpage(?:_|$)/i.test(id)) return true;
+  if ((a.getAttribute('rel') || '').toLowerCase().split(/\s+/).includes('next')) return true;
   const labels = [label, a.getAttribute('title'), a.getAttribute('aria-label')];
   if (typeof a.querySelectorAll === 'function') {
     for (const img of toList(a.querySelectorAll('img'))) labels.push(img.getAttribute('alt'));
   }
-  if (labels.some((s) => /^(下一页|next(?:\s+page)?)$/i.test(normalizeText(s)))) return 2;
-  return label === '前进' ? 1 : 0; // 兼容旧版纯文字分页
+  return labels.some((s) => /^(下一页|next(?:\s+page)?)$/i.test(normalizeText(s)));
 }
 
 /**
- * 从一个 Document 中提取“观看”行和“下一页”链接（兼容旧版“前进”）。
+ * 从一个 Document 中提取“观看”/“预览”行和“下一页”链接。
  * 只依赖 querySelectorAll / getAttribute / closest / textContent，测试中可用假对象。
  */
 export function extractPage(doc, baseUrl) {
   const rows = [];
   const issues = [];
   let next = null;
-  let nextPriority = 0;
   for (const a of toList(doc.querySelectorAll('a'))) {
     const label = textOf(a);
-    if (label === '观看') {
+    if (label === '观看' || label === '预览') {
       const tr = a.closest ? a.closest('tr') : null;
       if (!tr) {
-        issues.push('有一个“观看”链接不在表格行内，已跳过');
+        issues.push(`有一个“${label}”链接不在表格行内，已跳过`);
         continue;
       }
-      const s = extractCols(tr);
-      if (s) rows.push({ cols: s.cols, watchUrl: linkTarget(s.link || a, baseUrl) });
+      const cols = extractCols(tr);
+      if (cols) rows.push({ cols, watchUrl: linkTarget(a, baseUrl) });
       else rows.push({ text: rowText(tr), watchUrl: linkTarget(a, baseUrl) });
-    } else {
-      const priority = nextPagePriority(a, label);
-      if (priority > 0 && priority >= nextPriority) {
-        const candidate = { url: linkTarget(a, baseUrl), hasHref: a.getAttribute('href') != null };
-        if (priority > nextPriority || !next.url) {
-          next = candidate;
-          nextPriority = priority;
-        }
-      }
+    } else if ((!next || !next.url) && isNextPage(a, label)) {
+      next = { url: linkTarget(a, baseUrl), hasHref: a.getAttribute('href') != null };
     }
   }
   return { rows, next, issues };
 }
 
-function rowKey(row) {
-  const r = row.cols ? parseStructuredRow(row.cols) : parseRowText(row.text);
-  return r.ok ? entryKey(r.entry) : `raw:${r.text}`;
-}
-
 /**
- * 从第一页开始沿“下一页”（或旧版“前进”）翻页，汇总、解析、去重。
+ * 从第一页开始沿“下一页”翻页，汇总、解析、去重。
  * fetchDoc(url) => Promise<Document>，由调用方注入（浏览器用 fetch，测试用假对象）。
- * 旧版教学网末页仍有“前进”链接，请求后返回同一页内容：若新页面没有任何新录像，视为已到末页，
- * 不计入页数和结果。visited 仍用于防止真正的 URL 循环。
+ * 末页没有下一页按钮；visited 和 maxPages 防止异常分页造成循环。
  */
 export async function crawlCourse({ firstDoc, firstUrl, fetchDoc, maxPages = 50, onProgress = () => {} }) {
   const stripHash = (u) => String(u).split('#')[0];
   const warnings = [];
   const rows = [];
-  const seen = new Set();
   const visited = new Set([stripHash(firstUrl)]);
   let pageNo = 1;
   const addPage = (pg, n) => {
     for (const r of pg.rows) {
       rows.push({ ...r, page: n });
-      seen.add(rowKey(r));
     }
     pg.issues.forEach((msg) => warnings.push(`第 ${n} 页：${msg}`));
   };
@@ -168,11 +148,9 @@ export async function crawlCourse({ firstDoc, firstUrl, fetchDoc, maxPages = 50,
       warnings.push(`读取第 ${pageNo + 1} 页失败（${e.message}），已保留前 ${pageNo} 页的结果`);
       break;
     }
-    const next = extractPage(doc, url);
-    if (next.rows.length && next.rows.every((r) => seen.has(rowKey(r)))) break; // 没有新录像：已到末页
     pageNo += 1;
-    page = next;
-    if (!page.rows.length) warnings.push(`第 ${pageNo} 页没有找到“观看”条目（登录可能已过期）`);
+    page = extractPage(doc, url);
+    if (!page.rows.length) warnings.push(`第 ${pageNo} 页没有找到“观看”或“预览”条目（登录可能已过期）`);
     addPage(page, pageNo);
   }
 
@@ -181,7 +159,7 @@ export async function crawlCourse({ firstDoc, firstUrl, fetchDoc, maxPages = 50,
 
   failures.forEach((f) => warnings.push(`第 ${f.page} 页：${f.error}：“${f.text.slice(0, 60)}”`));
   if (duplicates.length) warnings.push(`发现 ${duplicates.length} 条重复录像，已合并`);
-  if (!rows.length) warnings.push('当前页面没有找到文本为“观看”的链接');
+  if (!rows.length) warnings.push('当前页面没有找到文本为“观看”或“预览”的链接');
 
   const status =
     `共 ${pageNo} 页，${sorted.length} 条录像` + (failures.length ? `，${failures.length} 行解析失败` : '');
